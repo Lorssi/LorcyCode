@@ -14,7 +14,6 @@ app = typer.Typer(
 console = Console()
 
 async def _run_agent():
-    console.print("AI 编程助手正在运行...")
     from .cli.ui.ui import ChatREPL
     repl = ChatREPL()
 
@@ -27,6 +26,11 @@ async def _run_agent():
     if not ok:
         console.print("[red]初始化失败[/red]")
         raise typer.Exit(1)
+    
+    try:
+        await repl.run()
+    finally:
+        pass
 
 @app.callback(invoke_without_command=True)
 def main(

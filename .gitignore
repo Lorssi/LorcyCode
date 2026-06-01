@@ -11,3 +11,4 @@ wheels/
 
 # Config
 .chat/
+.lorcy/
