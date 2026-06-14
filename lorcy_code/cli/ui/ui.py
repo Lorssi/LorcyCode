@@ -38,7 +38,7 @@ from .display import (
     render_info,
     get_context_usage_text,
 )
-from lorcy_code.cli.ui.prompts import select, text, confirm
+from lorcy_code.cli.ui.prompts import select, text, confirm, checkbox, select_or_custom
 from lorcy_code.cli.config.config import (
     first_run_configure,
 )
@@ -65,6 +65,8 @@ from lorcy_code.core.tools.tool_result_pipeline import (
     reset_budget_state,
 )
 from lorcy_code.core.utils.enhanced_chat_openai import EnhancedChatOpenAI
+from lorcy_code.core.skills.skill_loader import SkillLoader
+from lorcy_code.core.git.git_manager import GitManager, check_git_availability
 
 SLASH_COMMANDS = {
     "/new": "新会话",
@@ -127,6 +129,7 @@ def _rich_to_html(text: str) -> str:
 
     return "".join(result)
 
+
 class _LimitedFileHistory(FileHistory):
     MAX_ENTRIES = 50
 
@@ -180,11 +183,34 @@ class ChatREPL:
         self._processing = False
         self._stop_requested = False  # 暂停agent的flag
 
+        self.git_manager: GitManager | None = None  # git管理器
+        self.git = False  # git是否激活
+        self._git_cp_count = 0  # git提交数
+
         self._edit_buffer: str | None = None # 编辑缓冲区（用于 /edit 命令）
         self._interrupt_buffer: str | None = None # 中断恢复缓冲区（中断时将内容填回输入框，不进入编辑模式）
 
         self.agent = None  # agent实例
         self.checkpointer = None  # 检查点实例
+
+        self._skill_loader: SkillLoader | None = None # SkillLoader 复用，避免每条消息重建
+
+        self.session_mgr: SessionManager | None = None  # 会话管理器
+
+        # Windows 保留名（不能作为文件名）
+        self.WINDOWS_RESERVED_NAMES = {
+            "nul",
+            "con",
+            "aux",
+            "prn",
+            "com1",
+            "com2",
+            "com3",
+            "com4",
+            "lpt1",
+            "lpt2",
+            "lpt3",
+        }
 
     # ─── 清理 ────────────────────────────────────────
 
@@ -253,7 +279,23 @@ class ChatREPL:
             self.checkpointer,
         )
 
+        # 初始化 Git（subprocess.run 会阻塞事件循环）
+        await self._init_git()
+
         return True
+    
+    async def _init_git(self) -> None:
+        """初始化 Git"""
+        from lorcy_code.core.git.git_manager import GitManager, check_git_availability
+        is_available, status, version = await asyncio.to_thread(check_git_availability) # 检查是否安装了Git且为可用状态
+        if is_available: # 如果可用
+            self.git_manager = GitManager(str(self.workplace_path)) # 初始Git管理器
+            if not self.git_manager.is_repo(): # 如果没有Git仓库
+                await asyncio.to_thread(self.git_manager.init) # 就初始化Git
+            else: # 如果已经有Git仓库了
+                await asyncio.to_thread(self.git_manager._ensure_init_checkpoint) # 就确保 仓库至少有一条提交供回溯
+            self.git = True # 设置Git为可用状态，此后回溯消息会自动回溯工作目录
+            self._git_cp_count = self.git_manager.count_checkpoints() # 记录提交数
 
     async def run(self):
         render_welcome()
@@ -324,8 +366,8 @@ class ChatREPL:
                 parts.append(
                     "普通模式"
                 )
-                # if self.git and self.git_manager and self.git_manager.is_repo():
-                #     parts.append(f"Git ({self._git_cp_count} cp)")
+                if self.git and self.git_manager and self.git_manager.is_repo():
+                    parts.append(f"Git ({self._git_cp_count} cp)")
                 wp = str(self.workplace_path) if self.workplace_path else ""
                 if wp:
                     parts.append(f"cwd: {wp}")
@@ -426,8 +468,9 @@ class ChatREPL:
             "/history": self._cmd_history,
             "/model": self._cmd_model,
             "/compress": self._cmd_compress,
-            "/messages": None,
-            "/skill": None,
+            "/messages": self._cmd_messages,
+            "/skill": self._cmd_skill,
+            "/git": self._cmd_git,
             "/search": None,
             "/workdir": self._cmd_workdir,
             "/tools": self._cmd_tools,
@@ -455,8 +498,17 @@ class ChatREPL:
             # 保存原始输入，用于模型切换后重试时重置 input_data
             _original_input_data = input_data
 
+            if self._skill_loader is None:
+
+                self._skill_loader = SkillLoader(
+                    [
+                        self.workplace_path / ".lorcy/skills",
+                        Path.home() / ".lorcy/skills",
+                    ]
+                )
 
             skill_agent_context = SkillAgentContext(
+                skill_loader=self._skill_loader,
                 working_directory=self.workplace_path,
                 model_config=self.model_config,
                 thread_id=self.session_mgr.thread_id,
@@ -582,6 +634,22 @@ class ChatREPL:
             model_name = self.model_config.get("model", "")
             max_ctx = get_context_window_size(model_name)
             self._context_text = get_context_usage_text(messages, max_ctx)
+
+            def find_and_slice_from_end(lst, x):
+                """从后往前查找第一个 type==x 的元素，返回从该元素到末尾的切片"""
+                for i in range(len(lst) - 1, -1, -1):
+                    if lst[i].type == x:
+                        return lst[i:]
+                return []
+
+            if self.git and self.git_manager:
+                new_msgs = find_and_slice_from_end(messages, "human")
+                ids = [m.id for m in new_msgs]
+                result = await asyncio.to_thread(
+                    self.git_manager.add_commit, "&".join(ids)
+                )
+                if isinstance(result, int) and not isinstance(result, bool):
+                    self._git_cp_count = result
         except Exception:
             pass
 
@@ -736,7 +804,7 @@ class ChatREPL:
         # 关闭旧 checkpointer 连接，重建会话和 agent
         await self._rebuild_agent(rebuild_session=True)
 
-        # await self._init_git()
+        await self._init_git()
         render_success(f"工作目录: {self.workplace_path}")
 
     async def _cmd_history(self, _arg: str) -> None:
@@ -788,6 +856,8 @@ class ChatREPL:
                     render_success("会话已删除")
                     if selected_tid == self.session_mgr.thread_id:
                         await self._cmd_new("")
+                    else:
+                        await self._cmd_history(_arg) # 删除后回到历史会话列表
             case _: # 返回 或 Ctrl C 都回到上一步（重新加载历史会话）
                 await self._cmd_history(_arg)
 
@@ -917,3 +987,255 @@ class ChatREPL:
             render_conversation(messages)
         except Exception as e:
             render_error(f"加载对话失败: {e}")
+
+    async def _cmd_skill(self, _arg: str) -> None:
+        if not self.session_mgr:
+            render_error("请先初始化工作目录")
+            return
+        from lorcy_code.core.skills.skill_manager import manage_skills
+        await manage_skills(self.session_mgr)
+
+    async def _cmd_git(self, _arg: str) -> None:
+        if not self.git_manager:
+            from lorcy_code.core.git.git_manager import check_git_availability
+            is_available, status, version = await asyncio.to_thread(
+                check_git_availability
+            )
+            if is_available:
+                render_success(f"Git {version}")
+                await self._init_git()
+            else:
+                render_error(f"Git 不可用: {status}")
+                return
+
+        if self.git_manager.is_repo():
+            count = self.git_manager.count_checkpoints()
+            self._git_cp_count = count
+            render_success(f"Git 仓库已初始化 ({count} 个检查点)")
+        else:
+            render_warning("Git 仓库未初始化")
+
+    # ─── 消息管理命令 ──────────────────────────────────
+
+    async def _cmd_messages(self, _arg: str) -> None:
+        """管理历史消息：编辑、分叉、删除"""
+        from lorcy_code.core.environment.build_env import load_workplace, save_workplace
+        from lorcy_code.core.utils.messages_utils import (
+            _group_messages_by_turn,
+            _get_group_display,
+            _collect_ids_from_group,
+        )
+
+        if not self.agent or not self.session_mgr:
+            render_error("Agent 未初始化")
+            return
+
+        state = await self.agent.aget_state(self.session_mgr.config)
+        messages: list[BaseMessage] = state.values.get("messages", [])
+
+        groups = _group_messages_by_turn(messages)
+        if not groups:
+            render_warning("没有可管理的消息")
+            return
+
+        while True:
+            # 第一步：选择操作类型
+            action = await select("选择操作:", ["编辑消息", "分叉消息", "删除消息","返回"])
+            if not action or action == "返回":
+                return
+
+            # 构建选项列表（带返回选项）
+            options = []
+            for idx, group in enumerate(groups):
+                display = _get_group_display(group)
+                options.append(f"[{idx + 1}] {display}")
+
+            if action == "删除消息":
+                # 多选
+                chosen_list = await checkbox(
+                    "选择要删除的消息组（空格选择，回车确认）:", options
+                )
+                if not chosen_list:
+                    continue  # 返回操作选择
+
+                ok = await confirm(
+                    f"确定删除 {len(chosen_list)} 个消息组？", default=False
+                )
+                if not ok:
+                    continue
+
+                delete_ids = []
+                for chosen in chosen_list:
+                    try:
+                        sel_idx = int(chosen.split("]")[0].replace("[", "")) - 1
+                        if 0 <= sel_idx < len(groups):
+                            delete_ids.extend([m.id for m in groups[sel_idx]])
+                    except (ValueError, IndexError):
+                        continue
+
+                if not delete_ids:
+                    render_error("没有有效的选择")
+                    continue
+
+                await self._delete_messages(delete_ids)
+                render_success(f"已删除 {len(chosen_list)} 个消息组")
+                return
+
+            # 编辑 / 分叉：单选一条消息组
+            if action == "编辑消息":
+                hint = "选择要编辑的消息组（编辑后将删除此消息组之后的所有内容）:"
+            else:
+                hint = "选择 Fork 点（此消息组将保留在分支中）:"
+
+            select_options = options + ["返回"]
+            chosen = await select(hint, select_options)
+            if not chosen:
+                return
+            if chosen == "返回":
+                continue
+
+            # 解析选择
+            try:
+                sel_idx = int(chosen.split("]")[0].replace("[", "")) - 1
+                if sel_idx < 0 or sel_idx >= len(groups):
+                    render_error("无效的选择")
+                    continue
+            except (ValueError, IndexError):
+                render_error("无效的选择")
+                continue
+
+            if action == "编辑消息":
+                target_group = groups[sel_idx]
+                edit_msg = None
+                for msg in target_group:
+                    if msg.type == "human":
+                        edit_msg = msg
+                        break
+
+                if not edit_msg:
+                    render_warning("该组没有 HumanMessage")
+                    continue
+
+                ok = await confirm(
+                    "确定编辑此消息组？编辑后将删除此消息组之后的所有内容。",
+                    default=False,
+                )
+                if not ok:
+                    continue
+
+                no_need_ids, all_ids = _collect_ids_from_group(
+                    sel_idx, groups
+                )
+
+                if self.git and self.git_manager:
+                    try:
+                        await asyncio.to_thread(
+                            self.git_manager.rollback, no_need_ids, all_ids
+                        )
+                    except Exception as e:
+                        render_warning(f"Git 回滚失败: {e}")
+
+                await self._delete_messages(no_need_ids)
+
+                self._edit_buffer = get_text_content(edit_msg.content)
+                render_success("消息已加载到输入框，修改后发送即可重新生成")
+                return
+
+            elif action == "分叉消息":
+                ok = await confirm(
+                    f"确定从第 {sel_idx + 1} 条消息组创建分支？", default=True
+                )
+                if not ok:
+                    continue
+
+                no_need_ids, all_ids = _collect_ids_from_group(
+                    sel_idx, groups
+                )
+
+                saved = load_workplace()
+                if saved:
+                    choices = [str(saved), "自定义路径..."]
+                else:
+                    choices = ["自定义路径..."]
+
+                new_path_str = await select_or_custom("选择新工作目录:", choices)
+                if not new_path_str:
+                    continue
+
+                new_path = Path(new_path_str)
+                if not new_path.exists():
+                    render_error("路径不存在")
+                    continue
+
+                old_path = self.workplace_path
+
+                self.workplace_path = new_path
+                os.chdir(self.workplace_path)
+                save_workplace(self.workplace_path)
+
+                self._ensure_chat_dir(self.workplace_path)
+
+                if old_path != new_path:
+                    render_info("复制工作目录文件...")
+                    try:
+                        await asyncio.to_thread(self._copy_dir, old_path, new_path)
+                        # 复制 .git 目录以保留检查点数据
+                        old_git = old_path / ".git"
+                        new_git = new_path / ".git"
+                        if old_git.exists() and old_git.is_dir():
+                            await asyncio.to_thread(
+                                shutil.copytree, old_git, new_git, dirs_exist_ok=True
+                            )
+                        sessions_path = self.workplace_path / ".chat" / "sessions"
+                        if sessions_path.exists():
+                            await asyncio.to_thread(shutil.rmtree, sessions_path)
+                            sessions_path.mkdir(exist_ok=True)
+                    except Exception:
+                        import traceback
+
+                        tb = traceback.format_exc()
+                        render_error(f"复制文件失败:\n{tb}")
+                        self.workplace_path = old_path
+                        os.chdir(self.workplace_path)
+                        return
+
+                await self._rebuild_agent(rebuild_session=True)
+
+                need_messages = []
+                for i, group in enumerate(groups):
+                    need_messages.extend(group)
+                    if i == sel_idx:
+                        break
+
+                await self.agent.aupdate_state(
+                    self.session_mgr.config,
+                    {"messages": need_messages},
+                )
+
+                # 先初始化 git
+                await self._init_git()
+
+                # 回滚工作目录
+                if self.git and self.git_manager:
+                    try:
+                        await asyncio.to_thread(
+                            self.git_manager.rollback, no_need_ids, all_ids
+                        )
+                    except Exception as e:
+                        render_warning(f"Git 回滚失败: {e}")
+
+                render_success(f"分支已创建！工作目录: {self.workplace_path}")
+                await self._load_conversation()
+                return
+            
+    async def _delete_messages(self, message_ids: list[str]) -> None:
+        """删除指定消息"""
+        if not self.agent or not self.session_mgr:
+            return
+
+        # 使用 RemoveMessage 删除
+        remove_messages = [RemoveMessage(id=mid) for mid in message_ids]
+        await self.agent.aupdate_state(
+            self.session_mgr.config,
+            {"messages": remove_messages},
+        )

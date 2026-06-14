@@ -2,7 +2,7 @@ import aiosqlite
 
 from dataclasses import dataclass, field
 from pathlib import Path
-
+from lorcy_code.core.skills.skill_loader import SkillLoader
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 CONTEXT_WINDOW_SIZES: dict[str, int] = {
@@ -23,11 +23,6 @@ CONTEXT_WINDOW_SIZES: dict[str, int] = {
     "mimo-v2-flash": 262144,
     "qwen3.5-plus": 1048576,
     "qwen3.6-plus": 1048576,
-    "qwen": 256000,
-    "longcat-2.0-preview": 1048576,
-    "longcat-flash-chat": 262144,
-    "longcat-flash-thinking": 262144,
-    "longcat-flash-lite": 262144,
 }
 
 _DEFAULT_CONTEXT_WINDOW = 204800
@@ -35,19 +30,6 @@ _DEFAULT_CONTEXT_WINDOW = 204800
 class ModelSwitchError(Exception):
     """标记需要切换模型的异常"""
     pass
-
-@dataclass
-class SkillAgentContext:
-    """
-    Agent 运行时上下文
-
-    通过 ToolRuntime[SkillAgentContext] 在 tool 中访问
-    """
-
-    model_config: dict
-    working_directory: Path
-    thread_id: str = ""
-    extra: dict = field(default_factory=dict)
 
 def get_context_window_size(model_name: str) -> int:
     """根据模型名获取上下文窗口大小，无匹配时返回默认值"""
@@ -69,4 +51,18 @@ async def create_checkpointer(db_path: Path) -> AsyncSqliteSaver:
     """创建异步 SQLite checkpointer"""
     conn = await aiosqlite.connect(str(db_path))
     return AsyncSqliteSaver(conn)
+
+@dataclass
+class SkillAgentContext:
+    """
+    Agent 运行时上下文
+
+    通过 ToolRuntime[SkillAgentContext] 在 tool 中访问
+    """
+    skill_loader: SkillLoader
+    model_config: dict
+    working_directory: Path
+    thread_id: str = ""
+    extra: dict = field(default_factory=dict)
+
     

@@ -123,6 +123,7 @@ def load_workplace() -> Path | None:
     data = _load_setting()
     wp = data.get("workplace_path", "")
     return Path(wp) if wp else None
+    
 
 def _load_setting() -> dict:
     """读取 SETTING_JSON，失败返回空 dict。"""

@@ -10,23 +10,14 @@ from langchain.agents.middleware.context_editing import (
     ClearToolUsesEdit,
 )
 from langchain.agents.middleware.summarization import SummarizationMiddleware
-from langchain_core.messages import ToolMessage
-from langchain.tools.tool_node import ToolCallRequest
-from langgraph.types import Command
-
-from langchain.agents.middleware import (
-    dynamic_prompt,
-    wrap_tool_call,
-    wrap_model_call,
-    ModelRequest,
-    ModelResponse,
-    HumanInTheLoopMiddleware,
-)
 
 from lorcy_code.core.agent.middleware import (
+    load_skills,
     load_model,
     fix_messages,
     handle_tool_errors,
+    emit_thinking_events,
+    emit_tool_events,
 )
 
 _summarization_model: EnhancedChatOpenAI | None = None
@@ -63,7 +54,10 @@ def build_agent(
     agent = create_agent(
         model,
         middleware=[
+            emit_tool_events,
             handle_tool_errors,
+            emit_thinking_events,
+            load_skills,
             load_model,
             fix_messages,
             ContextEditingMiddleware(

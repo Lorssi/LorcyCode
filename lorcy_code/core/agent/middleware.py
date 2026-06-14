@@ -30,6 +30,88 @@ class ModelSwitchError(Exception):
     """标记需要切换模型的异常"""
     pass
 
+_IPC_SOCK: socket.socket | None = None
+_IPC_ADDR = ("127.0.0.1", 19876)
+
+
+def _ipc_send(event: dict) -> None:
+    global _IPC_SOCK
+    try:
+        if _IPC_SOCK is None:
+            _IPC_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        data = json.dumps(event, ensure_ascii=False).encode("utf-8")
+        _IPC_SOCK.sendto(data, _IPC_ADDR)
+    except Exception:
+        pass
+
+@wrap_model_call
+async def emit_thinking_events(
+    request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+) -> ModelResponse:
+    _ipc_send({"type": "thinking_start", "ts": time.time()})
+    try:
+        result = await handler(request)
+        _ipc_send({"type": "thinking_end", "ts": time.time()})
+        return result
+    except Exception:
+        _ipc_send({"type": "thinking_end", "ts": time.time()})
+        raise
+
+@wrap_tool_call
+async def emit_tool_events(
+    request: ToolCallRequest, handler: Callable[[ToolCallRequest], Command]
+) -> Command | ToolMessage:
+    tool_name = request.tool_call.get("name", "")
+    args = request.tool_call.get("args", {})
+    summary = ""
+    for key in ("command", "file_path", "pattern", "query", "url", "question",
+                "task", "filePath", "skill_name", "path", "prompt", "image_path"):
+        if key in args:
+            summary = str(args[key])[:80]
+            break
+    if not summary and "todos" in args:
+        todos = args["todos"]
+        if isinstance(todos, list) and todos:
+            first = todos[0]
+            if isinstance(first, dict):
+                summary = first.get("content", str(first))[:80]
+            else:
+                summary = str(first)[:80]
+
+    start_evt: dict = {"type": "tool_start", "tool": tool_name, "summary": summary, "ts": time.time()}
+    if tool_name == "agent":
+        sa_type = args.get("subagent_type", "general-purpose")
+        sa_desc = args.get("description", "")[:30]
+        start_evt["subagent_type"] = sa_type
+        start_evt["subagent_tag"] = f"{sa_type}: {sa_desc}"
+    try:
+        from lorcy_code.cli.ui.display import _current_agent_tag
+        tag = _current_agent_tag.get(None)
+    except Exception:
+        tag = None
+    if tag:
+        start_evt["subagent"] = tag
+
+    _ipc_send(start_evt)
+    try:
+        result = await handler(request)
+        ok = not (isinstance(result, ToolMessage) and getattr(result, "status", None) == "error")
+        end_evt: dict = {"type": "tool_end", "tool": tool_name, "success": ok, "ts": time.time()}
+        if tool_name == "agent":
+            end_evt["subagent_type"] = args.get("subagent_type", "general-purpose")
+            end_evt["subagent_tag"] = start_evt.get("subagent_tag", "")
+        if tag:
+            end_evt["subagent"] = tag
+        _ipc_send(end_evt)
+        return result
+    except Exception:
+        end_evt = {"type": "tool_end", "tool": tool_name, "success": False, "ts": time.time()}
+        if tool_name == "agent":
+            end_evt["subagent_type"] = args.get("subagent_type", "general-purpose")
+            end_evt["subagent_tag"] = start_evt.get("subagent_tag", "")
+        _ipc_send(end_evt)
+        raise
+
 @wrap_model_call
 async def load_model(
     request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
@@ -63,3 +145,26 @@ async def fix_messages(
     if len(real_messages) == len(messages):
         return await handler(request)
     return await handler(request.override(messages=real_messages))
+
+@dynamic_prompt
+async def load_skills(request: ModelRequest) -> str:
+    """构建 system prompt — Level 1: 注入所有 Skills 元数据"""
+    skill_loader = request.runtime.context.skill_loader
+    os_name = sys.platform
+
+    base_prompt = f"""You are a coding assistant. OS: {os_name}. CWD: {request.runtime.context.working_directory}.
+
+Tools:
+- bash: execute shell commands and scripts. Stop immediately if the user refuses.
+- read_file: view file content; write_file: create or save files; edit: modify existing files. Always read before write, prefer edit over write_file.
+- glob: find files by name pattern; grep: search file contents with regex; list_dir: browse directory structure.
+- todo_write: create and manage a task list for complex multi-step work.
+- load_skill: when a request matches a skill's description, load it first to get detailed instructions.
+
+"""
+
+    # 动态注入可用子 agent 列表
+    agents_section = "\n\nSub-agents:\n- Explore: codebase exploration and search\n- Plan: design implementation plans"
+    base_prompt += agents_section
+
+    return await asyncio.to_thread(skill_loader.build_system_prompt, base_prompt)
