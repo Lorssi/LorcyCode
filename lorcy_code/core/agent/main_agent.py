@@ -25,6 +25,8 @@ from langchain.agents.middleware import (
 
 from lorcy_code.core.agent.middleware import (
     load_model,
+    fix_messages,
+    handle_tool_errors,
 )
 
 _summarization_model: EnhancedChatOpenAI | None = None
@@ -61,7 +63,9 @@ def build_agent(
     agent = create_agent(
         model,
         middleware=[
+            handle_tool_errors,
             load_model,
+            fix_messages,
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
@@ -82,3 +86,14 @@ def build_agent(
         checkpointer=checkpointer,
     )
     return agent
+
+def update_summarization_model(model_config: dict) -> None:
+    """运行时更新 SummarizationMiddleware 的模型"""
+    if _summarization_model is not None:
+        new_model = EnhancedChatOpenAI(**model_config)
+        for key in new_model.model_fields_set:
+            try:
+                if key in new_model.__dict__:
+                    setattr(_summarization_model, key, new_model.__dict__[key])
+            except (AttributeError, TypeError):
+                pass

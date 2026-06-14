@@ -14,7 +14,9 @@ from lorcy_code.core.environment.build_env import (
     ENV_TO_CONFIG,
     ensure_chat_config_dir,
     ensure_home_config_dir,
-    _merge_and_save_config
+    _merge_and_save_config,
+    load_model_json,
+    save_model_json,
 )
 
 from lorcy_code.cli.ui.prompts import (
@@ -116,6 +118,68 @@ async def configure_new_model() -> dict | None:
     console.print(f"[green]模型配置已保存: {config['model']}[/green]")
 
     return config
+
+async def edit_current_model() -> dict | None:
+    """编辑当前默认模型"""
+    data = load_model_json()
+    current = data.get("default", {})
+    if not current:
+        console.print("[yellow]没有当前模型配置，请新建[/yellow]")
+        return await configure_new_model()
+
+    config = await model_config_form(existing_config=current)
+    if config is None:
+        return None
+
+    if not await _test_connection(config):
+        return None
+
+    data["default"] = config
+    save_model_json(data)
+    console.print(f"[green]模型配置已更新: {config['model']}[/green]")
+    return config
+
+async def switch_model() -> dict | None:
+    """切换模型（从 fallback 列表选择）"""
+    data = load_model_json()
+    default = data.get("default", {})
+    fallback = data.get("fallback", {})
+
+    if not default:
+        console.print("[yellow]请先配置默认模型[/yellow]")
+        return await configure_new_model()
+
+    if not fallback:
+        console.print("[yellow]没有备用模型可切换[/yellow]")
+        return None
+
+    # 构建选项列表
+    current_name = default.get("model", "")
+    choices = []
+    for name in fallback:
+        tag = " (当前默认)" if name == current_name else ""
+        choices.append(f"{name}{tag}")
+
+    result = await select("选择要使用的模型:", choices)
+    if result is None:
+        return None
+
+    # 提取模型名（去掉 " (当前默认)" 后缀）
+    selected_name = result.replace(" (当前默认)", "")
+
+    ok = await confirm(f"确定切换到 {selected_name}？当前默认将移至备用列表")
+    if not ok:
+        return None
+
+    selected_config = fallback.pop(selected_name)
+    if default and current_name not in fallback:
+        fallback[current_name] = default
+
+    data["default"] = selected_config
+    data["fallback"] = fallback
+    save_model_json(data)
+    console.print(f"[green]已切换到: {selected_name}[/green]")
+    return selected_config
 
 async def _test_connection(
     config: dict, *, quiet: bool = False, brief: bool = False, return_error: bool = False

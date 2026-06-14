@@ -48,10 +48,18 @@ def ensure_home_config_dir():
     # 确保当前目录下的.chat配置目录存在
     CONFIG_DIR.mkdir(exist_ok=True)
 
-def ensure_chat_config_dir():
-    CHAT_DIR.mkdir(exist_ok=True)
-    CHAT_SESSIONS_DIR.mkdir(exist_ok=True)
-    CHAT_SKILLS_DIR.mkdir(exist_ok=True)
+def ensure_chat_config_dir(workplace: Path | None = None):
+    """确保工作目录下 .chat/sessions 和 .chat/skills 子目录存在。"""
+    if workplace is None:
+        CHAT_DIR.mkdir(exist_ok=True)
+        CHAT_SESSIONS_DIR.mkdir(exist_ok=True)
+        CHAT_SKILLS_DIR.mkdir(exist_ok=True)
+    else:
+        chat_dir = workplace / ".lorcy"
+        chat_dir.mkdir(exist_ok=True)
+        (chat_dir / "sessions").mkdir(exist_ok=True)
+        (chat_dir / "skills").mkdir(exist_ok=True)
+
 
 # ========== 模型配置管理 ==========
 def get_cwd():
@@ -107,3 +115,33 @@ def _merge_and_save_config(
     data["default"] = new_config
     data["fallback"] = fallback
     save_model_json(data)
+
+# ========== 工作目录管理 ==========
+
+def load_workplace() -> Path | None:
+    """加载上次的工作目录"""
+    data = _load_setting()
+    wp = data.get("workplace_path", "")
+    return Path(wp) if wp else None
+
+def _load_setting() -> dict:
+    """读取 SETTING_JSON，失败返回空 dict。"""
+    if SETTING_JSON.exists():
+        try:
+            return json.loads(SETTING_JSON.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _update_setting(**kwargs) -> None:
+    """更新 SETTING_JSON 中的指定字段。"""
+    ensure_home_config_dir()
+
+    data = _load_setting()
+    data.update(kwargs)
+    SETTING_JSON.write_text(
+        json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8"
+    )
+
+def save_workplace(path: Path) -> None:
+    _update_setting(workplace_path=str(path))

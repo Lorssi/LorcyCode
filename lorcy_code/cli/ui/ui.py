@@ -2,6 +2,7 @@ import shutil
 import re
 import asyncio
 import openai
+import os
 import lorcy_code.cli.ui.display as _display
 from pathlib import Path
 from rich.console import Console
@@ -32,8 +33,12 @@ from .display import (
     render_ai_start,
     render_ai_end,
     render_ai_chunk,
+    render_warning,
+    render_success,
+    render_info,
+    get_context_usage_text,
 )
-
+from lorcy_code.cli.ui.prompts import select, text, confirm
 from lorcy_code.cli.config.config import (
     first_run_configure,
 )
@@ -47,11 +52,19 @@ from lorcy_code.cli.ui.display import (
     render_error,
     render_welcome,
 )
-from lorcy_code.core.utils.agent_setup import SkillAgentContext, ModelSwitchError
+from lorcy_code.core.utils.agent_setup import (
+    SkillAgentContext, 
+    ModelSwitchError, 
+    get_context_window_size,
+)
 from lorcy_code.core.utils.text_utils import get_text_content
-from lorcy_code.core.agent.main_agent import build_agent
+from lorcy_code.core.agent.main_agent import build_agent, update_summarization_model
 from lorcy_code.core.utils.session_manager import SessionManager
 from lorcy_code.core.utils.model_retry import ModelRetryException, fallback_manager
+from lorcy_code.core.tools.tool_result_pipeline import (
+    reset_budget_state,
+)
+from lorcy_code.core.utils.enhanced_chat_openai import EnhancedChatOpenAI
 
 SLASH_COMMANDS = {
     "/new": "新会话",
@@ -173,6 +186,32 @@ class ChatREPL:
         self.agent = None  # agent实例
         self.checkpointer = None  # 检查点实例
 
+    # ─── 清理 ────────────────────────────────────────
+
+    async def close_checkpointer(self) -> None:
+        """安全关闭 checkpointer 连接"""
+        if self.checkpointer is not None:
+            try:
+                await self.checkpointer.conn.close()
+            except Exception:
+                pass
+            finally:
+                self.checkpointer = None
+
+    async def _rebuild_agent(self, *, rebuild_session: bool = False) -> None:
+        """重建 agent（可选重建 session/checkpointer）"""
+        from lorcy_code.core.utils.agent_setup import create_checkpointer
+        if rebuild_session:
+            await self.close_checkpointer() # 关闭当前会话数据库连接
+            self.session_mgr:SessionManager = SessionManager(self.workplace_path) # 创建会话管理器
+            db_path = self.session_mgr.sessions_dir/ "checkpointer.db" # 创建新的会话数据库（一般是进入新工作目录才这样）
+            self.checkpointer = await create_checkpointer(db_path) # 创建数据库连接
+        self.agent = await asyncio.to_thread(  # 异步新线程构建agent
+            build_agent,
+            self.model_config,
+            self.checkpointer,
+        )
+
     async def initialize(self):
         # 确保配置目录存在
         ensure_home_config_dir()
@@ -189,17 +228,17 @@ class ChatREPL:
             
 
         # 构建 agent（可能较慢，放线程）
-        console.print()
-        console.print(
-            "[dim cyan]"
-            "██╗         ██████╗   ██████╗    ███████╗   ██╗   ██╗   ███████╗   ██████╗   █████╗    ████████╗\n"
-            "██║        ██╔═══██╗  ██╔══██╗   ██╔═════╝  ╚██╗ ██╔╝  ██╔═════╝  ██╔═══██╗  ██╔══██╗  ██╔═════╝\n"
-            "██║        ██║   ██║  ██████╔╝   ██║         ╚████╔╝   ██║        ██║   ██║  ██║  ██╗  ████████╗\n"
-            "██║        ██║   ██║  ██╔══██╗   ██║          ╚██╔╝    ██║        ██║   ██║  ██║  ██╔╝ ██╔═════╝\n"
-            "████████╗  ╚██████╔╝  ██║  ██║   ████████╗     ██║     ████████╗  ╚██████╔╝  █████╔═╝  ████████╗\n"
-            "╚═══════╝   ╚═════╝   ╚═╝  ╚═╝    ╚══════╝     ╚═╝      ╚══════╝   ╚═════╝   ╚════╝    ╚══════╝ \n"
-            "[dim cyan]"
-        )
+        # console.print()
+        # console.print(
+        #     "[dim cyan]"
+        #     "██╗         ██████╗   ██████╗    ███████╗   ██╗   ██╗   ███████╗   ██████╗   █████╗    ████████╗\n"
+        #     "██║        ██╔═══██╗  ██╔══██╗   ██╔═════╝  ╚██╗ ██╔╝  ██╔═════╝  ██╔═══██╗  ██╔══██╗  ██╔═════╝\n"
+        #     "██║        ██║   ██║  ██████╔╝   ██║         ╚████╔╝   ██║        ██║   ██║  ██║  ██╗  ████████╗\n"
+        #     "██║        ██║   ██║  ██╔══██╗   ██║          ╚██╔╝    ██║        ██║   ██║  ██║  ██╔╝ ██╔═════╝\n"
+        #     "████████╗  ╚██████╔╝  ██║  ██║   ████████╗     ██║     ████████╗  ╚██████╔╝  █████╔═╝  ████████╗\n"
+        #     "╚═══════╝   ╚═════╝   ╚═╝  ╚═╝    ╚══════╝     ╚═╝      ╚══════╝   ╚═════╝   ╚════╝    ╚══════╝ \n"
+        #     "[dim cyan]"
+        # )
 
         # 创建 checkpointer
         from lorcy_code.core.utils.agent_setup import create_checkpointer
@@ -377,7 +416,30 @@ class ChatREPL:
             return None
 
     async def _handle_command(self, cmd: str) -> None:
-        pass
+        """处理斜杠命令"""
+        parts = cmd.strip().split(maxsplit=1)
+        command = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
+
+        handlers = {
+            "/new": self._cmd_new,
+            "/history": self._cmd_history,
+            "/model": self._cmd_model,
+            "/compress": self._cmd_compress,
+            "/messages": None,
+            "/skill": None,
+            "/search": None,
+            "/workdir": self._cmd_workdir,
+            "/tools": self._cmd_tools,
+            "/help": self._cmd_help,
+            "/quit": self._cmd_quit,
+        }
+
+        handler = handlers.get(command)
+        if handler:
+            await handler(arg)
+        else:
+            render_warning(f"未知命令: {command}，输入 /help 查看帮助")
 
     async def _process_input(self, user_input: str) -> None:
         """处理用户输入并调用 agent"""
@@ -507,10 +569,21 @@ class ChatREPL:
                 render_ai_end()
 
             # 后处理（上下文更新 + Git 提交）放到后台，不阻塞输入框
-            # asyncio.create_task(self._post_process())
+            asyncio.create_task(self._post_process())
 
         finally:
             self._processing = False
+
+    async def _post_process(self) -> None:
+        """流式输出后的后台处理：更新上下文用量、Git 提交"""
+        try:
+            state = await self.agent.aget_state(self.session_mgr.config)
+            messages = state.values.get("messages", [])
+            model_name = self.model_config.get("model", "")
+            max_ctx = get_context_window_size(model_name)
+            self._context_text = get_context_usage_text(messages, max_ctx)
+        except Exception:
+            pass
 
     async def _cleanup_last_turn(self, append_msg: str | None = None) -> list[BaseMessage] | None:
         """查找最后一组消息：若无 AIMessage 则删除整组并返回该组，否则追加错误消息返回 None
@@ -549,8 +622,298 @@ class ChatREPL:
         except Exception:
             pass
         return None
+    
 
     async def _handle_agent_error(self, error: Exception) -> None:
         """Agent 出错时：当前组无 AIMessage 则删除整组，否则保存错误消息"""
         deleted = await self._cleanup_last_turn(f"Agent 执行错误: {error}")
         # 如果没有删除整组（已有 AIMessage），错误消息已在 _cleanup_last_turn 中追加
+
+    # ------ slash command handlers ------
+    async def _cmd_new(self, _arg: str) -> None:
+        reset_budget_state()
+        self.session_mgr.new_session()
+        # render_success("新会话已开始")
+        render_welcome()
+        # self._render_status_bar()
+
+    async def _cmd_tools(self, _arg: str) -> None:
+        from lorcy_code.core.tools.tools import ALL_TOOLS
+        from rich.table import Table
+        table = Table(title="内置工具")
+        table.add_column("工具", style="cyan")
+        table.add_column("说明")
+
+        for t in ALL_TOOLS:
+            name = t.name
+            desc = t.description.split("\n")[0] if t.description else ""
+            table.add_row(name, desc)
+
+        console.print(table)
+
+    async def _cmd_quit(self, _arg: str) -> None:
+        render_warning("Bye!")
+        raise EOFError()
+    
+    async def _cmd_help(self, _arg: str) -> None:
+        from rich.table import Table
+
+        table = Table(title="命令列表")
+        table.add_column("命令", style="cyan")
+        table.add_column("说明")
+        for cmd, desc in SLASH_COMMANDS.items():
+            table.add_row(cmd, desc)
+        console.print(table)
+
+    # 模型配置
+    async def _cmd_model(self, arg: str) -> None:
+        from lorcy_code.cli.config.config import (
+            configure_new_model,
+            edit_current_model,
+            switch_model,
+        )
+        from lorcy_code.cli.ui.prompts import select
+        if arg == "new":
+            config = await configure_new_model()
+        elif arg == "edit":
+            config = await edit_current_model()
+        elif arg == "switch":
+            config = await switch_model()
+        else:
+            action = await select(
+                "模型管理:",
+                [
+                    "新建模型 (/model new)",
+                    "编辑当前模型 (/model edit)",
+                    "切换模型 (/model switch)",
+                ],
+            )
+            if action is None:
+                return
+            if "新建" in action:
+                config = await configure_new_model()
+            elif "编辑" in action:
+                config = await edit_current_model()
+            elif "切换" in action:
+                config = await switch_model()
+            else:
+                return
+
+        if config:
+            self.model_config = config
+            from lorcy_code.core.agent.main_agent import update_summarization_model
+            # 同步更新摘要模型
+            update_summarization_model(config)
+
+    async def _cmd_workdir(self, _arg: str) -> None:
+        from lorcy_code.core.environment.build_env import load_workplace, save_workplace
+        from lorcy_code.cli.ui.prompts import select_or_custom
+        saved = load_workplace()
+        choices = [str(saved)] if saved else []
+
+        result = await select_or_custom(
+            "选择工作目录:",
+            choices,
+            custom_label="自定义路径...",
+            custom_prompt="请输入工作目录路径: ",
+        )
+        if not result:
+            return
+
+        new_path = Path(result)
+        if not new_path.exists():
+            render_error("路径不存在")
+            return
+
+        self.workplace_path = new_path
+        self._skill_loader = None  # 工作目录变了，失效缓存
+        os.chdir(self.workplace_path)
+        save_workplace(self.workplace_path)
+
+        # 重建子目录
+        ensure_chat_config_dir(self.workplace_path)
+
+        # 关闭旧 checkpointer 连接，重建会话和 agent
+        await self._rebuild_agent(rebuild_session=True)
+
+        # await self._init_git()
+        render_success(f"工作目录: {self.workplace_path}")
+
+    async def _cmd_history(self, _arg: str) -> None:
+        # ------------------- 1.选择会话--------------------------------------
+        if not self.session_mgr or not self.checkpointer or not self.agent:
+            return
+        sessions = await self.session_mgr.list_sessions(self.checkpointer) # 通过检查点从数据库（sqlite）中获取所有会话（实际为会话线程id）
+        if not sessions:
+            render_warning("没有历史会话")
+            return
+
+        sessions = sessions[-50:] # 取倒数50个会话并倒序排序（从新到旧）
+
+        display_names = await self.session_mgr.get_display_names(sessions, self.agent) # 渲染所有会话的名称，返回一个 {tid: display_name} 的字典
+        label_to_tid: dict[str, str] = {} # 初始化 <标签：会话线程id> 键值字典
+        labels: list[str] = [] # 初始化标签列表（展示给用户的会话名）
+        for tid in sessions:  # 遍历会话线程id
+            name = display_names.get(tid, tid) # 通过 会话线程id 获取渲染的 会话名 ，如果没有则直接用 线程id 代替 空的 会话名
+            label = name if name == tid else f"{name}  ({tid})" # 拼接 会话名 和 线程id 成 新的会话名，确保会话名 绝对的 唯一性
+            label_to_tid[label] = tid # 构建 <新的会话名：会话线程id>字典
+            labels.append(label) # 构建 会话名 列表（展示给用户）
+        labels.reverse() # 将 会话名 列表倒序（从新到旧）
+        labels.append("返回") # 在 会话名 列表最后 加上 返回 选项
+
+        action = await select("选择历史会话:", labels) # 获取用户 选择的 会话名
+        if action is None or action == "返回": # 如果是返回直接退出
+            return
+
+        selected_tid = label_to_tid[action] # 根据 用户选择 的会话名 在 之前构建好的<会话名：会话线程id>字典中 获取 会话名 对应的 会话线程id
+
+        # ------------------- 2.操作选择的会话--------------------------------------
+        match await select("操作:", ["加载此会话", "重命名此会话", "删除此会话", "返回"]): # 可以对会话进行 这4个操作
+            case "加载此会话":
+                self.session_mgr.set_thread(selected_tid) # 设置会话管理器 的 线程id 属性为 选中的 会话 对应的 线程id
+                await self._load_conversation() # 加载会话历史消息 （通过 线程id 从 agent 的 state 中取）
+            case "重命名此会话":
+                try:
+                    cur = self.session_mgr._load_names().get(selected_tid, "") # 尝试获取 已经可能被 更改过的 会话名  | names.json 通过 _save_names 保存。其在两个地方被调用：1. rename_session— 用户重命名会话时写入。  2. delete_session— 删除会话时从 names 里移除对应条目再写回
+                except Exception: # 获取失败（说明当前会话尚未被改过名）
+                    cur = ""
+                new_name = await text("输入新名称（留空恢复默认）:", default=cur)
+                if new_name is not None:
+                    self.session_mgr.rename_session(selected_tid, new_name) # 将 新会话名 和 对应的 线程id 持久化到 name.json中
+                    render_success("会话已重命名")
+            case "删除此会话":
+                ok = await confirm(f"确定删除会话 {selected_tid}？", default=False)
+                if ok:
+                    await self.session_mgr.delete_session(selected_tid, self.checkpointer)
+                    render_success("会话已删除")
+                    if selected_tid == self.session_mgr.thread_id:
+                        await self._cmd_new("")
+            case _: # 返回 或 Ctrl C 都回到上一步（重新加载历史会话）
+                await self._cmd_history(_arg)
+
+    async def _cmd_compress(self, _arg: str) -> None:
+        import json
+        if not self.model_config:
+            render_warning("请先配置模型")
+            return
+
+        if not await confirm("确定压缩当前会话？", default=True):
+            return
+
+        render_info("压缩中...")
+        try:
+            state = await self.agent.aget_state(self.session_mgr.config)
+            messages: list[BaseMessage] = state.values["messages"]
+
+            # 分离历史消息和最近消息
+            recent_messages = []
+            recent_message_ids = []
+            recent_count = 0
+            for msg in reversed(messages):
+                recent_messages.append(msg)
+                recent_message_ids.append(msg.id)
+                if isinstance(msg, HumanMessage):
+                    recent_count += 1
+                    if recent_count == 2:
+                        break
+
+            pre_messages = []
+            for msg in messages:
+                if msg.id not in recent_message_ids:
+                    msg.additional_kwargs["composed"] = True
+                    # 压缩时去掉 base64 图片/视频，避免 payload 过大导致 API 返回空 choices
+                    if isinstance(msg.content, list):
+                        clean_blocks = [
+                            b for b in msg.content
+                            if not isinstance(b, dict)
+                            or b.get("type") not in ("image_url", "video_url")
+                        ]
+                        if clean_blocks != msg.content:
+                            msg = msg.model_copy(update={"content": clean_blocks})
+                    pre_messages.append(msg)
+
+            model = EnhancedChatOpenAI(**self.model_config)
+
+            human_msg = HumanMessage(
+                content='以你的角度用第二人称压缩会话，严格按以下JSON格式输出，不要使用markdown代码块：\n{{"summary": "压缩内容"}}',
+                additional_kwargs={"hide": True, "composed": True},
+            )
+
+            try:
+                raw_resp = await asyncio.to_thread(
+                    model.invoke, pre_messages + [human_msg]
+                )
+
+                content = raw_resp.content.strip()
+                # 去除 markdown 代码块包裹
+                if content.startswith("```"):
+                    content = re.sub(r"^```(?:json)?\s*\n?", "", content)
+                    content = re.sub(r"\n?```\s*$", "", content)
+                # 提取包含 "summary" 的 JSON 对象（模型可能在 JSON 前输出思考内容）
+                json_match = re.search(r'\{[^{}]*"summary"[^{}]*\}', content)
+                if json_match:
+                    content = json_match.group()
+                else:
+                    # 可能 summary 值中包含嵌套对象，用逐字符括号匹配兜底
+                    # NOTE: 不处理字符串内的 `}`，但模型 summary 含 `}` 的概率极低，暂不改
+                    depth = 0
+                    start = -1
+                    for i, ch in enumerate(content):
+                        if ch == '{':
+                            if depth == 0:
+                                start = i
+                            depth += 1
+                        elif ch == '}':
+                            depth -= 1
+                            if depth == 0 and start >= 0:
+                                candidate = content[start:i+1]
+                                if '"summary"' in candidate:
+                                    content = candidate
+                                    break
+                data = json.loads(content)
+                ai_content = data.get("summary", "")
+                if isinstance(ai_content, dict):
+                    ai_content = json.dumps(ai_content, ensure_ascii=False)
+                if not ai_content:
+                    ai_content = "会话压缩失败: LLM 返回结果缺少 summary 字段"
+            except Exception as e:
+                ai_content = f"会话压缩失败: {e}"
+                human_msg.additional_kwargs["composed"] = True
+
+            if ai_content.startswith("会话压缩失败"):
+                ai_message = AIMessage(
+                    ai_content,
+                    additional_kwargs={"error": True, "composed": True},
+                    usage_metadata={
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                    },
+                )
+            else:
+                ai_message = AIMessage(
+                    f"历史对话已压缩: {ai_content}",
+                    additional_kwargs={"hide": True},
+                )
+
+            await self.agent.aupdate_state(
+                self.session_mgr.config,
+                {"messages": pre_messages + [human_msg, ai_message] + recent_messages},
+                as_node="model",
+            )
+            await self._load_conversation()
+            render_success("会话压缩完成")
+        except Exception as e:
+            render_error(f"压缩失败: {e}")
+
+    async def _load_conversation(self) -> None:
+        """加载当前会话的对话历史并渲染"""
+        from lorcy_code.cli.ui.display import render_conversation
+        if not self.agent:
+            return
+        try:
+            state = await self.agent.aget_state(self.session_mgr.config)
+            messages = state.values.get("messages", [])
+            render_conversation(messages)
+        except Exception as e:
+            render_error(f"加载对话失败: {e}")

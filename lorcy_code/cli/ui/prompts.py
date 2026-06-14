@@ -392,3 +392,18 @@ async def _ask_hyperparam(
             return _SKIP
         return raw.strip()
     return result
+
+# ======== 工作目录相关 ========
+async def select_or_custom(
+    message: str,
+    preset_choices: list[str],
+    custom_label: str = "自定义输入...",
+    custom_prompt: str = "请输入: ",
+    default: str | None = None,
+) -> str:
+    """下拉选择 + 自定义输入。末尾有「自定义输入...」选项。"""
+    choices = list(preset_choices) + [custom_label]
+    result = await select(message, choices, default=default)
+    if result == custom_label:
+        return await text(custom_prompt)
+    return result
