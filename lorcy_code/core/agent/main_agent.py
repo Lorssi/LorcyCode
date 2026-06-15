@@ -19,6 +19,7 @@ from lorcy_code.core.agent.middleware import (
     emit_thinking_events,
     emit_tool_events,
 )
+from lorcy_code.core.tools.tools import ALL_TOOLS
 
 _summarization_model: EnhancedChatOpenAI | None = None
 
@@ -52,7 +53,8 @@ def build_agent(
     summary_trigger = int(ctx_window * 0.9)
 
     agent = create_agent(
-        model,
+        model=model,
+        tools=ALL_TOOLS,
         middleware=[
             emit_tool_events,
             handle_tool_errors,
