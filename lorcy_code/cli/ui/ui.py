@@ -75,7 +75,7 @@ SLASH_COMMANDS = {
     "/messages": "管理历史消息（编辑/分叉/删除）",
     "/compress": "压缩会话",
     "/skill": "技能管理",
-    "/search": "配置 Tavily 搜索 API Key",
+    "/git": "Git 状态",
     "/workdir": "切换工作目录",
     "/tools": "显示内置工具",
     "/help": "显示帮助",
@@ -251,20 +251,6 @@ class ChatREPL:
             if config is None:
                 return False
             self.model_config = config
-            
-
-        # 构建 agent（可能较慢，放线程）
-        # console.print()
-        # console.print(
-        #     "[dim cyan]"
-        #     "██╗         ██████╗   ██████╗    ███████╗   ██╗   ██╗   ███████╗   ██████╗   █████╗    ████████╗\n"
-        #     "██║        ██╔═══██╗  ██╔══██╗   ██╔═════╝  ╚██╗ ██╔╝  ██╔═════╝  ██╔═══██╗  ██╔══██╗  ██╔═════╝\n"
-        #     "██║        ██║   ██║  ██████╔╝   ██║         ╚████╔╝   ██║        ██║   ██║  ██║  ██╗  ████████╗\n"
-        #     "██║        ██║   ██║  ██╔══██╗   ██║          ╚██╔╝    ██║        ██║   ██║  ██║  ██╔╝ ██╔═════╝\n"
-        #     "████████╗  ╚██████╔╝  ██║  ██║   ████████╗     ██║     ████████╗  ╚██████╔╝  █████╔═╝  ████████╗\n"
-        #     "╚═══════╝   ╚═════╝   ╚═╝  ╚═╝    ╚══════╝     ╚═╝      ╚══════╝   ╚═════╝   ╚════╝    ╚══════╝ \n"
-        #     "[dim cyan]"
-        # )
 
         # 创建 checkpointer
         from lorcy_code.core.utils.agent_setup import create_checkpointer
@@ -471,7 +457,6 @@ class ChatREPL:
             "/messages": self._cmd_messages,
             "/skill": self._cmd_skill,
             "/git": self._cmd_git,
-            "/search": None,
             "/workdir": self._cmd_workdir,
             "/tools": self._cmd_tools,
             "/help": self._cmd_help,
