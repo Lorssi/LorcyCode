@@ -149,9 +149,9 @@ async def _install_skill(session: SessionManager) -> None:
         return
 
     if "项目级" in location:
-        install_path = session.workplace_path / ".chat" / "skills"
+        install_path = session.workplace_path / ".lorcy" / "skills"
     else:
-        install_path = Path.home() / ".chat" / "skills"
+        install_path = Path.home() / ".lorcy" / "skills"
 
     install_path.mkdir(parents=True, exist_ok=True)
 

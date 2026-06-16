@@ -1321,7 +1321,7 @@ class ChatREPL:
                             await asyncio.to_thread(
                                 shutil.copytree, old_git, new_git, dirs_exist_ok=True
                             )
-                        sessions_path = self.workplace_path / ".chat" / "sessions"
+                        sessions_path = self.workplace_path / ".lorcy" / "sessions"
                         if sessions_path.exists():
                             await asyncio.to_thread(shutil.rmtree, sessions_path)
                             sessions_path.mkdir(exist_ok=True)

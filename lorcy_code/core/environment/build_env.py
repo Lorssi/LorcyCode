@@ -43,13 +43,13 @@ ENV_TO_CONFIG: dict[str, dict[str, str | list[str]]] = {
 
 # ========== 环境初始化 ==========
 
-# 确保.chat配置目录存在
+# 确保.lorcy配置目录存在
 def ensure_home_config_dir():
-    # 确保当前目录下的.chat配置目录存在
+    # 确保当前目录下的.lorcy配置目录存在
     CONFIG_DIR.mkdir(exist_ok=True)
 
 def ensure_chat_config_dir(workplace: Path | None = None):
-    """确保工作目录下 .chat/sessions 和 .chat/skills 子目录存在。"""
+    """确保工作目录下 .lorcy/sessions 和 .lorcy/skills 子目录存在。"""
     if workplace is None:
         CHAT_DIR.mkdir(exist_ok=True)
         CHAT_SESSIONS_DIR.mkdir(exist_ok=True)

@@ -15,7 +15,6 @@ BASE_URL_PRESETS = [
     "https://open.bigmodel.cn/api/paas/v4",
     "https://api.deepseek.com/v1",
     "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "https://api.longcat.chat/openai/v1",
 ]
 
 API_KEY_ENV_VARS = [
@@ -25,7 +24,6 @@ API_KEY_ENV_VARS = [
     ("DEEPSEEK_API_KEY", "DeepSeek"),
     ("DASHSCOPE_API_KEY", "通义千问"),
     ("ANTHROPIC_API_KEY", "Anthropic Claude"),
-    ("LONGCAT_API_KEY", "LongCat"),
 ]
 
 TEMPERATURE_PRESETS = ["0", "0.3", "0.5", "0.6", "0.7", "1.0", "1.5", "2.0"]

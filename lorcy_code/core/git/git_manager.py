@@ -38,7 +38,7 @@ def check_git_availability() -> Tuple[bool, str, Optional[str]]:
 class GitManager:
     """增强版Git检查点管理器，支持.gitignore管理"""
 
-    MINIMAL_GITIGNORE = ".git\n.chat\n.venv\n.gitignore\n__pycache__\n*.pyc\n.pytest_cache\n.coverage\n.pytest_cache/\n"
+    MINIMAL_GITIGNORE = ".git\n.lorcy\n.venv\n.gitignore\n__pycache__\n*.pyc\n.pytest_cache\n.coverage\n.pytest_cache/\n"
 
     def __init__(self, repo_path: str = "."):
         self.repo_path = Path(repo_path).resolve()

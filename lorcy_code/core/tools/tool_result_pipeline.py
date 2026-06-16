@@ -51,7 +51,7 @@ def _persist_to_disk(
     if workplace is None:
         return None
     try:
-        result_dir = workplace / ".chat" / "tool-results"
+        result_dir = workplace / ".lorcy" / "tool-results"
         result_dir.mkdir(parents=True, exist_ok=True)
         safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", tool_use_id)
         filepath = result_dir / f"{safe_id}.txt"

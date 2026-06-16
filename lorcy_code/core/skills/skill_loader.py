@@ -35,8 +35,8 @@ import yaml
 
 # 默认 Skills 搜索路径（项目级优先，用户级兜底）
 DEFAULT_SKILL_PATHS = [
-    Path.cwd() / ".lorcy" / "skills",  # 项目级 Skills (.chat/skills/) - 优先
-    Path.home() / ".lorcy" / "skills",  # 用户级 Skills (~/.chat/skills/) - 兜底
+    Path.cwd() / ".lorcy" / "skills",  # 项目级 Skills (.lorcy/skills/) - 优先
+    Path.home() / ".lorcy" / "skills",  # 用户级 Skills (~/.lorcy/skills/) - 兜底
 ]
 
 
@@ -100,8 +100,8 @@ class SkillLoader:
 
         Args:
             skill_paths: 自定义 Skills 搜索路径，默认为:
-                - .claude/skills/ (项目级，优先)
-                - ~/.claude/skills/ (用户级，兜底)
+                - .lorcy/skills/ (项目级，优先)
+                - ~/.lorcy/skills/ (用户级，兜底)
         """
         self.skill_paths = skill_paths or DEFAULT_SKILL_PATHS
         self._metadata_cache: dict[str, SkillMetadata] = {}
@@ -327,13 +327,13 @@ def scan_all_skills(project_path: Path | None = None) -> list[dict]:
 
     # 扫描项目级技能
     if project_path:
-        project_skills_path = project_path / ".chat" / "skills"
+        project_skills_path = project_path / ".lorcy" / "skills"
         if project_skills_path.exists():
             project_skills = _scan_skills_in_path(project_skills_path, "项目", loader)
             skills.extend(project_skills)
 
     # 扫描全局技能
-    global_skills_path = Path.home() / ".chat" / "skills"
+    global_skills_path = Path.home() / ".lorcy" / "skills"
     if global_skills_path.exists():
         global_skills = _scan_skills_in_path(global_skills_path, "全局", loader)
         skills.extend(global_skills)
