@@ -618,7 +618,7 @@ Args:
 
 
 def update_agent_tool_desc(yolo: bool) -> None:
-    agent.__doc__ = _AGENT_DESC_NORMAL
+    agent.__doc__ = _AGENT_DESC_YOLO if yolo else _AGENT_DESC_NORMAL
 
 @tool
 async def agent(
