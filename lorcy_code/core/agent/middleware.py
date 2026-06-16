@@ -6,7 +6,13 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from lorcy_code.cli.ui.display import console
 from lorcy_code.core.utils.enhanced_chat_openai import EnhancedChatOpenAI
+from lorcy_code.core.tools.tool_result_pipeline import (
+    clean_tool_output,
+    truncate_large_result,
+    enforce_per_turn_budget,
+)
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -32,6 +38,8 @@ class ModelSwitchError(Exception):
 
 _IPC_SOCK: socket.socket | None = None
 _IPC_ADDR = ("127.0.0.1", 19876)
+
+RETRY_DELAYS = [3, 10, 30, 60]
 
 
 def _ipc_send(event: dict) -> None:
@@ -164,7 +172,127 @@ Tools:
 """
 
     # 动态注入可用子 agent 列表
+    yolo = request.runtime.context.yolo
     agents_section = "\n\nSub-agents:\n- Explore: codebase exploration and search\n- Plan: design implementation plans"
+    if yolo:
+        agents_section += "\n- general-purpose: full-capability tasks including reading, writing, and executing code"
     base_prompt += agents_section
 
     return await asyncio.to_thread(skill_loader.build_system_prompt, base_prompt)
+    
+@wrap_model_call
+async def model_retry_with_backoff(
+    request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+) -> ModelResponse:
+    """指数级退避重试中间件 — 每次调用独立计数"""
+    from lorcy_code.core.utils.model_retry import fallback_manager
+    max_retries = 4
+    retry_count = 0
+
+    while True:
+        try:
+            return await handler(request)
+        except Exception as e:
+            retry_count += 1
+
+            if retry_count >= max_retries:
+                fallback = fallback_manager.get_or_load_fallback_model()
+                if fallback:
+                    console.print(f"[yellow]主模型重试{retry_count}次失败，切换到备用模型...[/yellow]")
+                    raise ModelSwitchError("切换到备用模型")
+                console.print(f"[red]请求失败，无备用模型可用，放弃请求\n  {e}[/red]")
+                raise
+
+            delay_idx = min(retry_count - 1, len(RETRY_DELAYS) - 1)
+            delay = RETRY_DELAYS[delay_idx]
+
+            console.print(f"[yellow]请求失败 ({retry_count}/{max_retries}), {delay}秒后重试...\n  {e}[/yellow]")
+
+            await asyncio.sleep(delay)
+
+@wrap_model_call
+async def detect_parallel_agents(
+    request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+) -> ModelResponse:
+    result = await handler(request)
+    if not result.result:
+        return result
+    ai_msg = result.result[0]
+    if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+        from lorcy_code.cli.ui import display as _d
+        agent_count = sum(1 for tc in ai_msg.tool_calls if tc.get("name") == "agent")
+        if agent_count >= 2:
+            _d._subagent_parallel = True
+    return result
+
+# ---------------------------------------------------------------------------
+# Human-in-the-loop 运行时更新配置相关（无需重建 agent）
+# ---------------------------------------------------------------------------
+
+class AsyncHITL(HumanInTheLoopMiddleware):
+    """异步 HITL 中间件 — 审批在 chat loop 中处理"""
+
+    async def awrap_model_call(self, request, handler):
+        return await handler(request)
+    
+_hitl_middleware: AsyncHITL | None = None
+
+def _build_interrupt_on(yolo: bool) -> dict:
+    return (
+        {}
+        if yolo
+        else {
+            "bash": {"allowed_decisions": ["approve", "reject"]},
+            "edit": {"allowed_decisions": ["approve", "reject"]},
+            "write_file": {"allowed_decisions": ["approve", "reject"]},
+        }
+    )
+
+def update_hitl_config(yolo: bool) -> None:
+    """运行时更新 HITL interrupt_on 配置，无需重建 agent"""
+    if _hitl_middleware is not None:
+        _hitl_middleware.interrupt_on = _build_interrupt_on(yolo)
+    from lorcy_code.core.tools.tools import update_agent_tool_desc
+    update_agent_tool_desc(yolo)
+
+@wrap_tool_call
+async def restrict_agent_type(
+    request: ToolCallRequest, handler: Callable[[ToolCallRequest], Command]
+) -> Command | ToolMessage:
+    if request.tool_call.get("name") == "agent":
+        args = request.tool_call.get("args", {})
+        if args.get("subagent_type") == "general-purpose":
+            if _hitl_middleware is not None and _hitl_middleware.interrupt_on:
+                args["subagent_type"] = "Explore"
+    return await handler(request)
+
+# ---------------------------------------------------------------------------
+# Tool 结果截断和预算控制中间件
+# ---------------------------------------------------------------------------
+
+@wrap_model_call
+async def tool_result_budget(
+    request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
+) -> ModelResponse:
+    """工具结果截断和 token 预算控制"""
+    workplace = request.runtime.context.working_directory
+    messages = list(request.messages)
+    changed = False
+    for i, msg in enumerate(messages):
+        if isinstance(msg, ToolMessage) and msg.content:
+            if msg.additional_kwargs.get("_budget_ok"):
+                continue
+            cleaned = clean_tool_output(msg.content)
+            truncated = truncate_large_result(
+                cleaned,
+                msg.name or "",
+                msg.tool_call_id,
+                workplace=workplace,
+            )
+            new_kwargs = {**msg.additional_kwargs, "_budget_ok": True}
+            messages[i] = msg.model_copy(update={"content": truncated, "additional_kwargs": new_kwargs})
+            changed = True
+    if changed:
+        messages = enforce_per_turn_budget(messages, budget=200_000, workplace=workplace)
+        return await handler(request.override(messages=messages))
+    return await handler(request)

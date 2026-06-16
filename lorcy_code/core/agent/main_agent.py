@@ -10,6 +10,7 @@ from langchain.agents.middleware.context_editing import (
     ClearToolUsesEdit,
 )
 from langchain.agents.middleware.summarization import SummarizationMiddleware
+from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
 
 from lorcy_code.core.agent.middleware import (
     load_skills,
@@ -18,27 +19,31 @@ from lorcy_code.core.agent.middleware import (
     handle_tool_errors,
     emit_thinking_events,
     emit_tool_events,
+    model_retry_with_backoff,
+    detect_parallel_agents,
+    _build_interrupt_on,
+    restrict_agent_type,
+    tool_result_budget,
+    _hitl_middleware,
+    AsyncHITL,
 )
 from lorcy_code.core.tools.tools import ALL_TOOLS
 
-_summarization_model: EnhancedChatOpenAI | None = None
-
-
 def _dummy_model():
     from langchain_openai import ChatOpenAI
-
     return ChatOpenAI(model="placeholder", api_key="sk-placeholder", max_retries=0)
-
 
 def build_agent(
     model_config: dict | None = None,
     checkpointer: AsyncSqliteSaver | None = None,
+    yolo: bool = False,
 ) -> object:
     """构建 agent 实例"""
     global _summarization_model
     cfg = model_config
     model = _dummy_model()
 
+    _hitl_middleware = AsyncHITL(interrupt_on=_build_interrupt_on(yolo))
     _summarization_model = EnhancedChatOpenAI(**cfg)
 
     # 加载 fallback 模型配置
@@ -56,11 +61,15 @@ def build_agent(
         model=model,
         tools=ALL_TOOLS,
         middleware=[
+            restrict_agent_type,
             emit_tool_events,
             handle_tool_errors,
             emit_thinking_events,
+            detect_parallel_agents,
+            tool_result_budget,
             load_skills,
             load_model,
+            model_retry_with_backoff,
             fix_messages,
             ContextEditingMiddleware(
                 edits=[
@@ -77,11 +86,18 @@ def build_agent(
                 trigger=("tokens", summary_trigger),
                 keep=("messages", 20),
             ),
+            _hitl_middleware,
         ],
         context_schema=SkillAgentContext,
         checkpointer=checkpointer,
     )
     return agent
+
+# ---------------------------------------------------------------------------
+# Summarization Model 运行时更新配置相关（无需重建 agent）
+# ---------------------------------------------------------------------------
+
+_summarization_model: EnhancedChatOpenAI | None = None
 
 def update_summarization_model(model_config: dict) -> None:
     """运行时更新 SummarizationMiddleware 的模型"""

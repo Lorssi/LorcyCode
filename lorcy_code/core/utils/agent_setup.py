@@ -64,5 +64,6 @@ class SkillAgentContext:
     working_directory: Path
     thread_id: str = ""
     extra: dict = field(default_factory=dict)
+    yolo: bool = False
 
     

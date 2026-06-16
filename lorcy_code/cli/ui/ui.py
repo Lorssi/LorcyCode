@@ -75,6 +75,7 @@ SLASH_COMMANDS = {
     "/messages": "管理历史消息（编辑/分叉/删除）",
     "/compress": "压缩会话",
     "/skill": "技能管理",
+    "/mode": "模式切换（Common/Yolo）",
     "/git": "Git 状态",
     "/workdir": "切换工作目录",
     "/tools": "显示内置工具",
@@ -182,6 +183,7 @@ class ChatREPL:
         self._context_text: str = "" # 上下文用量缓存
         self._processing = False
         self._stop_requested = False  # 暂停agent的flag
+        self.yolo = False  # Yolo模式
 
         self.git_manager: GitManager | None = None  # git管理器
         self.git = False  # git是否激活
@@ -230,12 +232,13 @@ class ChatREPL:
         if rebuild_session:
             await self.close_checkpointer() # 关闭当前会话数据库连接
             self.session_mgr:SessionManager = SessionManager(self.workplace_path) # 创建会话管理器
-            db_path = self.session_mgr.sessions_dir/ "checkpointer.db" # 创建新的会话数据库（一般是进入新工作目录才这样）
+            db_path = self.session_mgr.sessions_dir / "checkpointer.db" # 创建新的会话数据库（一般是进入新工作目录才这样）
             self.checkpointer = await create_checkpointer(db_path) # 创建数据库连接
         self.agent = await asyncio.to_thread(  # 异步新线程构建agent
             build_agent,
             self.model_config,
             self.checkpointer,
+            self.yolo,
         )
 
     async def initialize(self):
@@ -263,6 +266,7 @@ class ChatREPL:
             build_agent,
             self.model_config,
             self.checkpointer,
+            self.yolo
         )
 
         # 初始化 Git（subprocess.run 会阻塞事件循环）
@@ -331,6 +335,10 @@ class ChatREPL:
             def _newline(event):
                 event.current_buffer.insert_text("\n") # 向缓冲区插入换行
 
+            @kb.add("tab")
+            def _tab_toggle_mode(event):
+                pass
+
             _last_width = 0
             _last_width_time = 0.0
 
@@ -350,7 +358,7 @@ class ChatREPL:
                     styled = _rich_to_html(self._context_text)
                     parts.append(styled)
                 parts.append(
-                    "普通模式"
+                    "普通模式" if not self.yolo else "<ansired>YOLO 模式</ansired>"
                 )
                 if self.git and self.git_manager and self.git_manager.is_repo():
                     parts.append(f"Git ({self._git_cp_count} cp)")
@@ -456,6 +464,7 @@ class ChatREPL:
             "/compress": self._cmd_compress,
             "/messages": self._cmd_messages,
             "/skill": self._cmd_skill,
+            "/mode": self._cmd_mode,
             "/git": self._cmd_git,
             "/workdir": self._cmd_workdir,
             "/tools": self._cmd_tools,
@@ -497,6 +506,7 @@ class ChatREPL:
                 working_directory=self.workplace_path,
                 model_config=self.model_config,
                 thread_id=self.session_mgr.thread_id,
+                yolo=self.yolo,
             )
 
             while True:
@@ -567,9 +577,11 @@ class ChatREPL:
                             await self._rebuild_agent()
                             # 重建 context 以使用新模型配置
                             skill_agent_context = SkillAgentContext(
+                                skill_loader=self._skill_loader,
                                 working_directory=self.workplace_path,
                                 model_config=self.model_config,
                                 thread_id=self.session_mgr.thread_id,
+                                yolo=self.yolo,
                             )
                             # 如果当前 input_data 是已消费的 Command(resume=...)，
                             # 重置为原始输入，避免复用已消费的 Command
@@ -682,7 +694,145 @@ class ChatREPL:
         deleted = await self._cleanup_last_turn(f"Agent 执行错误: {error}")
         # 如果没有删除整组（已有 AIMessage），错误消息已在 _cleanup_last_turn 中追加
 
-    # ------ slash command handlers ------
+    # --------------------------------------------------------------------------------
+    # 中断处理
+    # --------------------------------------------------------------------------------
+
+    async def _collect_decisions_async(self, interrupt_chunk) -> list[dict]:
+        """收集 HITL 决策"""
+        console.print()  # 确保 AI 输出和 HITL 之间有换行
+        decisions = []
+        for interrupt in interrupt_chunk["__interrupt__"]:
+            action_requests = interrupt.value["action_requests"]
+
+            for action_request in action_requests:
+                name = action_request["name"]
+                args = action_request["args"]
+
+                content = ""
+                match name:
+                    case "bash":
+                        content = args.get("command", "")
+                    case "write_file":
+                        content = f"写入文件: {args.get('file_path')}\n内容: {args.get('content', '')[:200]}"
+                    case "edit":
+                        file_path = args.get("file_path", "")
+                        old_str = args.get("old_string", "")
+                        new_str = args.get("new_string", "")
+                        render_warning(f"[HITL] edit  修改文件: {file_path}")
+                        import difflib
+                        from rich.table import Table
+
+                        # 查找 old_str 在文件中的起始行号
+                        start_line = 1
+                        try:
+                            content = await asyncio.to_thread(
+                                Path(file_path).read_text, encoding="utf-8"
+                            )
+                            for i, line in enumerate(content.splitlines(), 1):
+                                if old_str.splitlines()[0] in line:
+                                    start_line = i
+                                    break
+                        except Exception:
+                            pass
+                        old_lines = old_str.splitlines()
+                        new_lines = new_str.splitlines()
+                        table = Table(
+                            show_header=False,
+                            show_edge=False,
+                            padding=(0, 1),
+                            border_style="dim",
+                        )
+                        table.add_column("old", ratio=1)
+                        table.add_column("new", ratio=1)
+                        sm = difflib.SequenceMatcher(None, old_lines, new_lines)
+                        old_num = start_line
+                        new_num = start_line
+                        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+                            if tag == "equal":
+                                for k in range(i2 - i1):
+                                    table.add_row(
+                                        Text(
+                                            f"  {old_num:>3}  {old_lines[i1 + k]}",
+                                            style="dim",
+                                        ),
+                                        Text(
+                                            f"  {new_num:>3}  {new_lines[j1 + k]}",
+                                            style="dim",
+                                        ),
+                                    )
+                                    old_num += 1
+                                    new_num += 1
+                            elif tag == "replace":
+                                max_len = max(i2 - i1, j2 - j1)
+                                for k in range(max_len):
+                                    old_text = (
+                                        Text(
+                                            f"{old_num:>3} - {old_lines[i1 + k]}",
+                                            style="red",
+                                        )
+                                        if k < i2 - i1
+                                        else None
+                                    )
+                                    new_text = (
+                                        Text(
+                                            f"{new_num:>3} + {new_lines[j1 + k]}",
+                                            style="green",
+                                        )
+                                        if k < j2 - j1
+                                        else None
+                                    )
+                                    table.add_row(old_text, new_text)
+                                    if k < i2 - i1:
+                                        old_num += 1
+                                    if k < j2 - j1:
+                                        new_num += 1
+                            elif tag == "delete":
+                                for k in range(i2 - i1):
+                                    table.add_row(
+                                        Text(
+                                            f"{old_num:>3} - {old_lines[i1 + k]}",
+                                            style="red",
+                                        )
+                                    )
+                                    old_num += 1
+                            elif tag == "insert":
+                                for k in range(j2 - j1):
+                                    table.add_row(
+                                        None,
+                                        Text(
+                                            f"{new_num:>3} + {new_lines[j1 + k]}",
+                                            style="green",
+                                        ),
+                                    )
+                                    new_num += 1
+                        console.print(table)
+                        content = None  # 已直接渲染，跳过通用渲染
+
+                if self.yolo:
+                    select_action = True
+                else:
+                    if content is not None:
+                        render_warning(f"[HITL] {name}")
+                        console.print(Text(f"  {content[:500]}", style="dim"))
+                    result = await select(
+                        "操作:",
+                        ["approve (批准)", "reject (拒绝)"],
+                    )
+                    select_action = result != "reject (拒绝)" if result else False
+
+                extra = {}
+                if not select_action:
+                    extra["message"] = "用户已拒绝"
+                decision = {"type": "approve" if select_action else "reject"}
+                decision.update(extra)
+                decisions.append(decision)
+
+        return decisions
+
+    # --------------------------------------------------------------------------------
+    # 命令处理函数（斜杠命令的具体实现） - 每个函数对应一个斜杠命令，参数为命令后面的字符串
+    # --------------------------------------------------------------------------------
     async def _cmd_new(self, _arg: str) -> None:
         reset_budget_state()
         self.session_mgr.new_session()
@@ -1224,3 +1374,21 @@ class ChatREPL:
             self.session_mgr.config,
             {"messages": remove_messages},
         )
+
+    # ---------------------------------------------------------------------------------
+    # Yolo 模式切换命令 - 允许用户在 Common 模式（需要审批）和 Yolo 模式（自动批准）之间切换
+    # ---------------------------------------------------------------------------------
+
+    async def _cmd_mode(self, _arg: str) -> None:
+        action = await select(
+            "选择模式:",
+            ["Common (手动批准风险操作)", "Yolo (自动批准所有操作)"],
+        )
+        if action is None:
+            return
+        self.yolo = "Yolo" in action
+        from lorcy_code.core.agent.main_agent import update_hitl_config
+
+        update_hitl_config(self.yolo)
+        mode_str = "Yolo" if self.yolo else "Common"
+        render_success(f"已切换到 {mode_str} 模式")

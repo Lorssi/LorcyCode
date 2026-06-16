@@ -585,6 +585,41 @@ Args:
 
     return output
 
+# ---------------------------------------------------------------------------
+# agent — 启动子 Agent 来执行任务
+# ---------------------------------------------------------------------------
+
+_AGENT_DESC_NORMAL = """Launch a sub-agent to perform a task autonomously.
+
+Available sub-agent types:
+- "Explore": For codebase exploration, searching code, finding files.
+- "Plan": For designing implementation plans and architectural analysis.
+
+Args:
+    prompt: The task description for the sub-agent.
+    subagent_type: Type of sub-agent to launch ("Explore", "Plan", or a custom agent name).
+    description: Short description of what this sub-agent invocation does (for display purposes).
+    timeout_seconds: Maximum seconds the sub-agent can run before being terminated. Default 300 (5 minutes). Must be greater than 300 (5 minutes) to allow sufficient execution time.
+"""
+
+_AGENT_DESC_YOLO = """Launch a sub-agent to perform a task autonomously.
+
+Available sub-agent types:
+- "Explore": For codebase exploration, searching code, finding files.
+- "Plan": For designing implementation plans and architectural analysis.
+- "general-purpose": For full-capability tasks including reading, writing, and executing code.
+
+Args:
+    prompt: The task description for the sub-agent.
+    subagent_type: Type of sub-agent to launch ("Explore", "Plan", "general-purpose", or a custom agent name).
+    description: Short description of what this sub-agent invocation does (for display purposes).
+    timeout_seconds: Maximum seconds the sub-agent can run before being terminated. Default 300 (5 minutes). Must be greater than 300 (5 minutes) to allow sufficient execution time.
+"""
+
+
+def update_agent_tool_desc(yolo: bool) -> None:
+    agent.__doc__ = _AGENT_DESC_NORMAL
+
 @tool
 async def agent(
     prompt: str,
