@@ -15,7 +15,6 @@ from rich.live import Live
 from rich._spinners import SPINNERS
 from rich.align import Align
 from rich.table import Table
-from rich.columns import Columns
 
 import asyncio
 import contextvars
@@ -278,43 +277,22 @@ def render_welcome() -> None:
         logo.append(" ")
     subtitle = Text("Terminal-based AI Coding Agent", style="dim italic cyan")
 
-    # 左列：快捷键
-    keys = Table.grid(padding=(0, 2))
-    keys.add_column(style="bold cyan", justify="right", no_wrap=True)
-    keys.add_column(style="white", justify="left", no_wrap=True)
-    keys.add_row("Enter", "发送消息")
-    keys.add_row("Ctrl+Enter", "插入换行")
-    keys.add_row("Ctrl+C", "中断生成")
-    keys.add_row("Ctrl+D", "退出会话")
-    keys.add_row("/help", "查看所有命令")
-    keys.add_row("/quit", "退出 LorcyCode")
-
-    # 右列：常用命令
-    cmds = Table.grid(padding=(0, 2))
-    cmds.add_column(style="bold cyan", justify="right", no_wrap=True)
-    cmds.add_column(style="white", justify="left", no_wrap=True)
-    cmds.add_row("/new", "开启新会话")
-    cmds.add_row("/model", "切换模型")
-    cmds.add_row("/tools", "查看内置工具")
-    cmds.add_row("/history", "查看历史记录")
-    cmds.add_row("/mode", "切换协作模式")
-    cmds.add_row("/git", "Git 操作")
-
-    panel_body = Columns([keys, cmds], equal=True, expand=True, padding=(0, 4))
+    # 快捷键与命令（精简为常用项）
+    tips = Table.grid(padding=(0, 3))
+    tips.add_column(style="bold bright_cyan", justify="right", no_wrap=True)
+    tips.add_column(style="dim", justify="center", no_wrap=True, min_width=1)
+    tips.add_column(style="white", justify="left", no_wrap=True)
+    tips.add_row("Enter", "·", "发送消息")
+    tips.add_row("Ctrl+Enter", "·", "插入换行")
+    tips.add_row("Ctrl+C", "·", "中断生成")
+    tips.add_row("/help", "·", "查看命令")
+    tips.add_row("/quit", "·", "退出程序")
 
     console.print()
     console.print(Align.center(logo))
     console.print(Align.center(subtitle))
     console.print()
-    console.print(
-        Panel(
-            panel_body,
-            border_style="cyan",
-            title="[bold cyan]快捷键 / 命令[/bold cyan]",
-            title_align="center",
-            padding=(1, 2),
-        )
-    )
+    console.print(Align.center(tips))
     console.print()
 
 
