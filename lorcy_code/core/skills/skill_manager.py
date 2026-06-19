@@ -49,7 +49,7 @@ async def _list_skills(session: SessionManager) -> None:
     # 构建表格
     table = Table(title="已安装技能")
     table.add_column("名称", style="cyan")
-    table.add_column("类型", style="green")
+    table.add_column("范围", style="green")
     table.add_column("描述", style="white")
     table.add_column("路径", style="dim")
     for s in skills:

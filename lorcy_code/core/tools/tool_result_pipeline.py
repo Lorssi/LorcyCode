@@ -160,11 +160,11 @@ def _select_to_replace(
     limit: int,
 ) -> list[tuple[int, BaseMessage]]:
     fresh_total = sum(_content_size(m.content or "") for _, m in fresh)
-    if frozen_size + fresh_total <= limit:
+    if frozen_size + fresh_total <= limit: # 完全不超标，无需替换
         return []
-    deficit = frozen_size + fresh_total - limit
+    deficit = frozen_size + fresh_total - limit # 超出的预算
     sorted_fresh = sorted(
-        fresh, key=lambda x: _content_size(x[1].content or ""), reverse=True
+        fresh, key=lambda x: _content_size(x[1].content or ""), reverse=True # 优先替换体积大的
     )
     selected: list[tuple[int, BaseMessage]] = []
     reclaimed = 0
@@ -202,9 +202,9 @@ def enforce_per_turn_budget(
                 continue
             tool_use_id = msg.tool_call_id or ""
             if tool_use_id in state.seen_ids:
-                if tool_use_id in state.replacements:
+                if tool_use_id in state.replacements: # 见过且被截断
                     replacement_map[idx] = state.replacements[tool_use_id]
-                else:
+                else: # 见过但没被截断
                     frozen_size += _content_size(msg.content or "")
             else:
                 fresh.append((idx, msg))

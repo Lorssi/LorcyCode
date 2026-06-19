@@ -14,7 +14,6 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.layout.dimension import Dimension
 
 from langchain_core.messages import (
     AIMessage,
@@ -389,42 +388,6 @@ class ChatREPL:
                     }
                 ),
             )
-
-            # 动态缓存区高度
-            def _dynamic_buffer_height():
-                buff = self._prompt_session.default_buffer
-                if buff.complete_state is not None:
-                    n = len(buff.complete_state.completions)
-                    needed = min(n + 2, 10)
-                    return Dimension(min=needed, max=needed)
-                line_count = buff.text.count("\n") + 1
-                return Dimension(min=line_count, max=line_count)
-            
-            # 寻找缓存区窗口
-            def _find_buffer_window(container):
-                from prompt_toolkit.layout.containers import Window
-                from prompt_toolkit.layout.controls import BufferControl
-
-                if isinstance(container, Window):
-                    if isinstance(getattr(container, "content", None), BufferControl):
-                        return container
-                for attr in ("content", "children", "alternative_content"):
-                    child = getattr(container, attr, None)
-                    if child is None:
-                        continue
-                    children = child if isinstance(child, list) else [child]
-                    for c in children:
-                        result = _find_buffer_window(c)
-                        if result:
-                            return result
-                return None
-            
-            buffer_window = _find_buffer_window(
-                self._prompt_session.app.layout.container
-            )
-            if buffer_window:
-                buffer_window.height = _dynamic_buffer_height
-
         try:
             # 如果有编辑缓冲区，预填充到输入框
             if self._edit_buffer is not None:

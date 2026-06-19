@@ -98,7 +98,7 @@ class GitManager:
                     json.dumps({}, indent=4), encoding="utf-8"
                 )
             self._ensure_init_checkpoint()
-            return False
+            return False # 仓库已存在，没有执行初始化
         if not self.gitignore_file.exists():
             self.create_gitignore()
         result = self._run(["init"])

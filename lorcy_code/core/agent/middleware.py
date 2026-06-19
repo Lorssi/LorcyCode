@@ -120,6 +120,10 @@ async def emit_tool_events(
         _ipc_send(end_evt)
         raise
 
+# ---------------------------------------------------------------------------
+# 动态加载模型
+# ---------------------------------------------------------------------------
+
 @wrap_model_call
 async def load_model(
     request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
@@ -129,6 +133,10 @@ async def load_model(
     kwargs = dict(model_config)
 
     return await handler(request.override(model=EnhancedChatOpenAI(**kwargs)))
+
+# ---------------------------------------------------------------------------
+# 工具调用Error处理
+# ---------------------------------------------------------------------------
 
 @wrap_tool_call
 async def handle_tool_errors(
@@ -143,6 +151,10 @@ async def handle_tool_errors(
             status="error",
         )
     
+# ---------------------------------------------------------------------------
+# 消息过滤与修正中间件
+# ---------------------------------------------------------------------------
+    
 @wrap_model_call
 async def fix_messages(
     request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
@@ -153,6 +165,10 @@ async def fix_messages(
     if len(real_messages) == len(messages):
         return await handler(request)
     return await handler(request.override(messages=real_messages))
+
+# ---------------------------------------------------------------------------
+# 系统提示构建中间件
+# ---------------------------------------------------------------------------
 
 @dynamic_prompt
 async def load_skills(request: ModelRequest) -> str:
@@ -180,6 +196,10 @@ Tools:
 
     return await asyncio.to_thread(skill_loader.build_system_prompt, base_prompt)
     
+# ---------------------------------------------------------------------------
+# 重试与Back Up机制
+# ---------------------------------------------------------------------------
+
 @wrap_model_call
 async def model_retry_with_backoff(
     request: ModelRequest, handler: Callable[[ModelRequest], ModelResponse]
@@ -209,6 +229,10 @@ async def model_retry_with_backoff(
             console.print(f"[yellow]请求失败 ({retry_count}/{max_retries}), {delay}秒后重试...\n  {e}[/yellow]")
 
             await asyncio.sleep(delay)
+
+# ---------------------------------------------------------------------------
+# 多Agent输出控制
+# ---------------------------------------------------------------------------
 
 @wrap_model_call
 async def detect_parallel_agents(
