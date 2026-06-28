@@ -1271,7 +1271,8 @@ class ChatREPL:
                 os.chdir(self.workplace_path)
                 save_workplace(self.workplace_path)
 
-                self._ensure_chat_dir(self.workplace_path)
+                from lorcy_code.core.environment.build_env import ensure_chat_config_dir
+                ensure_chat_config_dir(self.workplace_path)
 
                 if old_path != new_path:
                     render_info("复制工作目录文件...")

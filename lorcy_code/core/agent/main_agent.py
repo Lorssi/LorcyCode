@@ -16,8 +16,6 @@ from lorcy_code.core.agent.middleware import (
     load_model,
     fix_messages,
     handle_tool_errors,
-    emit_thinking_events,
-    emit_tool_events,
     model_retry_with_backoff,
     detect_parallel_agents,
     _build_interrupt_on,
@@ -61,9 +59,7 @@ def build_agent(
         tools=ALL_TOOLS,
         middleware=[
             restrict_agent_type,
-            emit_tool_events,
             handle_tool_errors,
-            emit_thinking_events,
             detect_parallel_agents,
             tool_result_budget,
             load_skills,
