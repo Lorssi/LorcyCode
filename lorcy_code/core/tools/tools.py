@@ -739,7 +739,18 @@ async def load_skill(skill_name: str, runtime: ToolRuntime[SkillAgentContext]) -
     skill_content = loader.load_skill(skill_name)
 
     if not skill_content:
-        # # 列出可用的 skills（从已扫描的元数据中获取）
+        if loader.has_skill(skill_name):
+            enabled = loader.get_enabled_skill_names()
+            if enabled:
+                return (
+                    f"Skill '{skill_name}' is installed but not enabled for this workspace. "
+                    f"Enabled skills: {', '.join(enabled)}"
+                )
+            return (
+                f"Skill '{skill_name}' is installed but not enabled for this workspace. "
+                "No skills are currently enabled."
+            )
+
         skills = loader.scan_skills()
         if skills:
             available = [s.name for s in skills]

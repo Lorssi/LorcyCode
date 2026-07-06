@@ -12,7 +12,11 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from lorcy_code.cli.ui.display import console
-from lorcy_code.cli.ui.prompts import select, confirm, text
+from lorcy_code.cli.ui.prompts import select, confirm, text, checkbox
+from lorcy_code.core.environment.build_env import (
+    load_skill_selection,
+    save_skill_selection,
+)
 from .skill_loader import (
     scan_all_skills,
     validate_skill_package,
@@ -39,16 +43,56 @@ async def manage_skills(session: SessionManager) -> None:
             await _install_skill(session)
 
 
-async def _list_skills(session: SessionManager) -> None:
-    """列出所有已安装技能，支持下拉选择操作"""
+def get_workspace_skill_selection(session: SessionManager) -> dict:
+    return load_skill_selection(session.workplace_path)
+
+
+def list_workspace_skills(session: SessionManager) -> list[dict]:
     skills = scan_all_skills(session.workplace_path)
+    selection = get_workspace_skill_selection(session)
+    enabled = set(selection.get("skills", []))
+    mode = selection.get("mode", "all")
+
+    for skill in skills:
+        skill["enabled"] = mode == "all" or skill["name"] in enabled
+
+    return skills
+
+
+def save_workspace_skill_selection(
+    session: SessionManager,
+    mode: str,
+    skill_names: list[str],
+) -> tuple[dict, list[str]]:
+    installed = {skill["name"] for skill in scan_all_skills(session.workplace_path)}
+    valid_names = sorted({name for name in skill_names if name in installed})
+    invalid_names = sorted({name for name in skill_names if name not in installed})
+
+    normalized = {
+        "mode": "all" if mode != "selected" else "selected",
+        "skills": [] if mode != "selected" else valid_names,
+    }
+    save_skill_selection(session.workplace_path, normalized)
+    return normalized, invalid_names
+
+
+def format_skill_selection_status(selection: dict, installed_count: int) -> str:
+    mode = selection.get("mode", "all")
+    skills = selection.get("skills", [])
+    if mode == "all":
+        return f"已恢复全部 skill（共 {installed_count} 个）"
+    return f"已启用 {len(skills)} 个 skill"
+
+
+def render_workspace_skill_table(session: SessionManager) -> list[dict]:
+    skills = list_workspace_skills(session)
     if not skills:
         console.print("[yellow]没有发现已安装的技能[/yellow]")
-        return
+        return skills
 
-    # 构建表格
-    table = Table(title="已安装技能")
+    table = Table(title="工作区技能")
     table.add_column("名称", style="cyan")
+    table.add_column("状态", style="green")
     table.add_column("范围", style="green")
     table.add_column("描述", style="white")
     table.add_column("路径", style="dim")
@@ -56,8 +100,52 @@ async def _list_skills(session: SessionManager) -> None:
         desc = s["description"]
         if len(desc) > 60:
             desc = desc[:57] + "..."
-        table.add_row(s["name"], s["type"], desc, str(s["path"]))
+        table.add_row(
+            s["name"],
+            "已启用" if s.get("enabled") else "已禁用",
+            s["type"],
+            desc,
+            str(s["path"]),
+        )
     console.print(table)
+    return skills
+
+
+async def choose_workspace_skills(session: SessionManager) -> tuple[dict, list[str]] | None:
+    skills = list_workspace_skills(session)
+    if not skills:
+        return None
+
+    current_selection = get_workspace_skill_selection(session)
+    current_enabled = set(current_selection.get("skills", []))
+    choices = []
+    for skill in skills:
+        checked = (
+            current_selection.get("mode", "all") == "all"
+            or skill["name"] in current_enabled
+        )
+        choices.append(
+            {
+                "name": f"{skill['name']} ({skill['type']})",
+                "value": skill["name"],
+                "checked": checked,
+            }
+        )
+
+    selected_names = await checkbox("选择当前工作区要启用的 skills:", choices)
+    normalized, invalid_names = save_workspace_skill_selection(
+        session,
+        "selected",
+        selected_names,
+    )
+    return normalized, invalid_names
+
+
+async def _list_skills(session: SessionManager) -> None:
+    """列出所有已安装技能，支持下拉选择操作"""
+    skills = render_workspace_skill_table(session)
+    if not skills:
+        return
 
     # 选择操作
     names = [f"{s['name']} ({s['type']})" for s in skills]

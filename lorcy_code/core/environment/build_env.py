@@ -2,6 +2,8 @@ import json
 
 from pathlib import Path
 
+from lorcy_code.core.utils.json_utils import atomic_write_json
+
 # 环境变量配置
 CONFIG_DIR = Path.home() / ".lorcy"
 MODEL_JSON = CONFIG_DIR / "model.json"
@@ -10,6 +12,7 @@ SETTING_JSON = CONFIG_DIR / "lorcyagent.json"
 CHAT_DIR = Path.cwd() / ".lorcy"
 CHAT_SESSIONS_DIR = CHAT_DIR / "sessions"
 CHAT_SKILLS_DIR = CHAT_DIR / "skills"
+CHAT_SKILL_SELECTION_JSON = CHAT_DIR / "skill_selection.json"
 
 _model_json_cache: tuple[float, dict] | None = None
 
@@ -146,3 +149,49 @@ def _update_setting(**kwargs) -> None:
 
 def save_workplace(path: Path) -> None:
     _update_setting(workplace_path=str(path))
+
+
+def get_skill_selection_path(workplace: Path | None = None) -> Path:
+    if workplace is None:
+        return CHAT_SKILL_SELECTION_JSON
+    return workplace / ".lorcy" / "skill_selection.json"
+
+
+def load_skill_selection(workplace: Path | None = None) -> dict:
+    path = get_skill_selection_path(workplace)
+    if not path.exists():
+        return {"mode": "all", "skills": []}
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"mode": "all", "skills": []}
+
+    mode = data.get("mode", "all")
+    if mode not in {"all", "selected"}:
+        mode = "all"
+
+    skills = data.get("skills", [])
+    if not isinstance(skills, list):
+        skills = []
+
+    normalized_skills = [
+        str(skill).strip() for skill in skills if str(skill).strip()
+    ]
+    return {"mode": mode, "skills": normalized_skills}
+
+
+def save_skill_selection(workplace: Path, data: dict) -> None:
+    ensure_chat_config_dir(workplace)
+    path = get_skill_selection_path(workplace)
+    mode = data.get("mode", "all")
+    if mode not in {"all", "selected"}:
+        mode = "all"
+    skills = data.get("skills", [])
+    if not isinstance(skills, list):
+        skills = []
+    normalized = {
+        "mode": mode,
+        "skills": [str(skill).strip() for skill in skills if str(skill).strip()],
+    }
+    atomic_write_json(path, normalized, indent=4, ensure_dir=True)

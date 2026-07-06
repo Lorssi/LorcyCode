@@ -73,7 +73,7 @@ SLASH_COMMANDS = {
     "/model": "模型管理（新建/编辑/切换）",
     "/messages": "管理历史消息（编辑/分叉/删除）",
     "/compress": "压缩会话",
-    "/skill": "技能管理",
+    "/skill": "技能启用与管理",
     "/mode": "模式切换（Common/Yolo）",
     "/git": "Git 状态",
     "/workdir": "切换工作目录",
@@ -198,6 +198,33 @@ class ChatREPL:
 
         self.session_mgr: SessionManager | None = None  # 会话管理器
 
+    def _create_skill_loader(self) -> SkillLoader:
+        from lorcy_code.core.environment.build_env import load_skill_selection
+
+        selection = load_skill_selection(self.workplace_path)
+        return SkillLoader(
+            [
+                self.workplace_path / ".lorcy/skills",
+                Path.home() / ".lorcy/skills",
+            ],
+            selection_mode=selection.get("mode", "all"),
+            enabled_skills=selection.get("skills", []),
+        )
+
+    def _ensure_skill_loader(self) -> SkillLoader:
+        if self._skill_loader is None:
+            self._skill_loader = self._create_skill_loader()
+        return self._skill_loader
+
+    def _skill_status_text(self) -> str:
+        loader = self._skill_loader
+        if loader is None:
+            return "skills: all"
+        selection = loader.get_skill_selection()
+        if selection.get("mode") == "all":
+            return "skills: all"
+        return f"skills: {len(loader.get_enabled_skill_names())}"
+
         # Windows 保留名（不能作为文件名）
         self.WINDOWS_RESERVED_NAMES = {
             "nul",
@@ -253,6 +280,8 @@ class ChatREPL:
             if config is None:
                 return False
             self.model_config = config
+
+        self._skill_loader = self._create_skill_loader()
 
         # 创建 checkpointer
         from lorcy_code.core.utils.agent_setup import create_checkpointer
@@ -361,6 +390,7 @@ class ChatREPL:
                 )
                 if self.git and self.git_manager and self.git_manager.is_repo():
                     parts.append(f"Git ({self._git_cp_count} cp)")
+                parts.append(self._skill_status_text())
                 wp = str(self.workplace_path) if self.workplace_path else ""
                 if wp:
                     parts.append(f"cwd: {wp}")
@@ -455,17 +485,10 @@ class ChatREPL:
             # 保存原始输入，用于模型切换后重试时重置 input_data
             _original_input_data = input_data
 
-            if self._skill_loader is None:
-
-                self._skill_loader = SkillLoader(
-                    [
-                        self.workplace_path / ".lorcy/skills",
-                        Path.home() / ".lorcy/skills",
-                    ]
-                )
+            skill_loader = self._ensure_skill_loader()
 
             skill_agent_context = SkillAgentContext(
-                skill_loader=self._skill_loader,
+                skill_loader=skill_loader,
                 working_directory=self.workplace_path,
                 model_config=self.model_config,
                 thread_id=self.session_mgr.thread_id,
@@ -540,7 +563,7 @@ class ChatREPL:
                             await self._rebuild_agent()
                             # 重建 context 以使用新模型配置
                             skill_agent_context = SkillAgentContext(
-                                skill_loader=self._skill_loader,
+                                skill_loader=skill_loader,
                                 working_directory=self.workplace_path,
                                 model_config=self.model_config,
                                 thread_id=self.session_mgr.thread_id,
@@ -892,12 +915,12 @@ class ChatREPL:
             return
 
         self.workplace_path = new_path
-        self._skill_loader = None  # 工作目录变了，失效缓存
         os.chdir(self.workplace_path)
         save_workplace(self.workplace_path)
 
         # 重建子目录
         ensure_chat_config_dir(self.workplace_path)
+        self._skill_loader = self._create_skill_loader()
 
         # 关闭旧 checkpointer 连接，重建会话和 agent
         await self._rebuild_agent(rebuild_session=True)
@@ -1090,8 +1113,106 @@ class ChatREPL:
         if not self.session_mgr:
             render_error("请先初始化工作目录")
             return
-        from lorcy_code.core.skills.skill_manager import manage_skills
-        await manage_skills(self.session_mgr)
+        from lorcy_code.core.skills.skill_manager import (
+            manage_skills,
+            list_workspace_skills,
+            render_workspace_skill_table,
+            choose_workspace_skills,
+            save_workspace_skill_selection,
+            format_skill_selection_status,
+        )
+
+        arg = _arg.strip()
+        loader = self._ensure_skill_loader()
+
+        async def _apply_selection(mode: str, names: list[str]) -> tuple[dict, list[str], int]:
+            selection, invalid = save_workspace_skill_selection(
+                self.session_mgr,
+                mode,
+                names,
+            )
+            loader.set_skill_selection(selection["mode"], selection["skills"])
+            installed_count = len(list_workspace_skills(self.session_mgr))
+            return selection, invalid, installed_count
+
+        if not arg:
+            action = await select(
+                "Skill 设置:",
+                [
+                    "选择当前工作区启用的 skills",
+                    "查看 skills 状态",
+                    "恢复全部 skills",
+                    "清空已启用 skills",
+                    "技能管理",
+                    "返回",
+                ],
+            )
+            if action is None or action == "返回":
+                return
+            if action == "选择当前工作区启用的 skills":
+                result = await choose_workspace_skills(self.session_mgr)
+                if result is None:
+                    return
+                selection, invalid = result
+                loader.set_skill_selection(selection["mode"], selection["skills"])
+                installed_count = len(list_workspace_skills(self.session_mgr))
+                render_success(
+                    format_skill_selection_status(selection, installed_count)
+                )
+                if invalid:
+                    render_warning(f"已忽略不存在的 skill: {', '.join(invalid)}")
+                return
+            if action == "查看 skills 状态":
+                render_workspace_skill_table(self.session_mgr)
+                return
+            if action == "恢复全部 skills":
+                selection, invalid, installed_count = await _apply_selection("all", [])
+                render_success(format_skill_selection_status(selection, installed_count))
+                if invalid:
+                    render_warning(f"已忽略不存在的 skill: {', '.join(invalid)}")
+                return
+            if action == "清空已启用 skills":
+                selection, invalid, installed_count = await _apply_selection("selected", [])
+                render_success(format_skill_selection_status(selection, installed_count))
+                if invalid:
+                    render_warning(f"已忽略不存在的 skill: {', '.join(invalid)}")
+                return
+            if action == "技能管理":
+                await manage_skills(self.session_mgr)
+                loader.scan_all_skills(force=True)
+                return
+
+        parts = arg.split()
+        subcmd = parts[0].lower()
+        names = parts[1:]
+
+        if subcmd == "list":
+            render_workspace_skill_table(self.session_mgr)
+            return
+        if subcmd == "use":
+            selection, invalid, installed_count = await _apply_selection("selected", names)
+            render_success(format_skill_selection_status(selection, installed_count))
+            if invalid:
+                render_warning(f"已忽略不存在的 skill: {', '.join(invalid)}")
+            return
+        if subcmd == "all":
+            selection, invalid, installed_count = await _apply_selection("all", [])
+            render_success(format_skill_selection_status(selection, installed_count))
+            if invalid:
+                render_warning(f"已忽略不存在的 skill: {', '.join(invalid)}")
+            return
+        if subcmd == "clear":
+            selection, invalid, installed_count = await _apply_selection("selected", [])
+            render_success(format_skill_selection_status(selection, installed_count))
+            if invalid:
+                render_warning(f"已忽略不存在的 skill: {', '.join(invalid)}")
+            return
+        if subcmd == "manage":
+            await manage_skills(self.session_mgr)
+            loader.scan_all_skills(force=True)
+            return
+
+        render_warning("未知 /skill 子命令，可用: list, use, all, clear, manage")
 
     async def _cmd_git(self, _arg: str) -> None:
         if not self.git_manager:

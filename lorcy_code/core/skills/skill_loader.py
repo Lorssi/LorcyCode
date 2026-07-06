@@ -94,7 +94,13 @@ class SkillLoader:
         print(skill.instructions)
     """
 
-    def __init__(self, skill_paths: list[Path] | None = None):
+    def __init__(
+        self,
+        skill_paths: list[Path] | None = None,
+        *,
+        selection_mode: str = "all",
+        enabled_skills: list[str] | set[str] | None = None,
+    ):
         """
         初始化加载器
 
@@ -108,6 +114,9 @@ class SkillLoader:
         self._scan_cache: list[SkillMetadata] | None = None
         self._dir_mtimes: dict[str, float] = {}
         self._file_mtimes: dict[str, float] = {}
+        self._selection_mode = "all"
+        self._enabled_skills: set[str] = set()
+        self.set_skill_selection(selection_mode, enabled_skills)
 
     def _is_cache_valid(self) -> bool:
         for base_path in self.skill_paths:
@@ -154,7 +163,7 @@ class SkillLoader:
             except OSError:
                 pass
 
-    def scan_skills(self, *, force: bool = False) -> list[SkillMetadata]:
+    def scan_all_skills(self, *, force: bool = False) -> list[SkillMetadata]:
         """
         Level 1: 扫描所有 Skills 元数据
 
@@ -194,6 +203,52 @@ class SkillLoader:
         self._scan_cache = skills
         self._save_mtimes()
         return skills
+
+    def scan_skills(self, *, force: bool = False) -> list[SkillMetadata]:
+        """返回当前启用的 Skills 元数据列表"""
+        skills = self.scan_all_skills(force=force)
+        return self._filter_enabled_skills(skills)
+
+    def set_skill_selection(
+        self,
+        mode: str,
+        enabled_skills: list[str] | set[str] | None = None,
+    ) -> None:
+        self._selection_mode = mode if mode in {"all", "selected"} else "all"
+        self._enabled_skills = {
+            str(name).strip() for name in (enabled_skills or []) if str(name).strip()
+        }
+
+    def get_skill_selection(self) -> dict:
+        return {
+            "mode": self._selection_mode,
+            "skills": sorted(self._enabled_skills),
+        }
+
+    def get_enabled_skill_names(self, *, force: bool = False) -> list[str]:
+        return [skill.name for skill in self.scan_skills(force=force)]
+
+    def get_all_skill_names(self, *, force: bool = False) -> list[str]:
+        return [skill.name for skill in self.scan_all_skills(force=force)]
+
+    def is_skill_enabled(self, skill_name: str, *, force: bool = False) -> bool:
+        for metadata in self.scan_skills(force=force):
+            if metadata.name == skill_name:
+                return True
+        return False
+
+    def has_skill(self, skill_name: str, *, force: bool = False) -> bool:
+        for metadata in self.scan_all_skills(force=force):
+            if metadata.name == skill_name:
+                return True
+        return False
+
+    def _filter_enabled_skills(
+        self, skills: list[SkillMetadata]
+    ) -> list[SkillMetadata]:
+        if self._selection_mode == "all":
+            return skills
+        return [skill for skill in skills if skill.name in self._enabled_skills]
 
     # 解析skill元数据
     def _parse_skill_metadata(self, skill_md_path: Path) -> Optional[SkillMetadata]:
@@ -236,14 +291,13 @@ class SkillLoader:
             Skill 完整内容，未找到返回 None
         """
         # 先检查缓存
+        if not self.is_skill_enabled(skill_name):
+            return None
+
         metadata = self._metadata_cache.get(skill_name)
-
-        # 原始冗余代码
         if not metadata:
-            # 尝试重新扫描
-            self.scan_skills()
+            self.scan_all_skills()
             metadata = self._metadata_cache.get(skill_name)
-
         if not metadata:
             return None
 
