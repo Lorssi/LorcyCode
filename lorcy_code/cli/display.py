@@ -13,6 +13,8 @@ from rich.live import Live
 from rich._spinners import SPINNERS
 from rich.align import Align
 from rich.table import Table
+from rich.theme import Theme
+from rich.box import ROUNDED
 
 import asyncio
 import contextvars
@@ -34,7 +36,20 @@ _progress_task: asyncio.Task | None = None
 _DOTS = SPINNERS["dots"]["frames"]
 _DOTS_MS = SPINNERS["dots"]["interval"]
 
-console = Console()
+THEME = Theme(
+    {
+        "brand": "bold #5eead4",
+        "accent": "#60a5fa",
+        "muted": "#7c8aa5",
+        "surface": "#111827",
+        "success": "bold #34d399",
+        "warning": "bold #fbbf24",
+        "danger": "bold #fb7185",
+        "tool": "#a78bfa",
+    }
+)
+
+console = Console(theme=THEME, highlight=False)
 
 
 def _suppress_in_subagent(fn):
@@ -58,10 +73,11 @@ def render_human(message: str) -> None:
     console.print(
         Panel(
             Markdown(message),
-            border_style="blue",
-            title="You",
+            border_style="accent",
+            title="[bold #60a5fa] YOU [/bold #60a5fa]",
             title_align="right",
             padding=(0, 1),
+            box=ROUNDED,
         )
     )
 
@@ -97,10 +113,11 @@ def render_reasoning(reasoning: str) -> None:
     console.print(
         Panel(
             Text(reasoning, style="dim italic"),
-            border_style="dim",
-            title="Thinking",
+            border_style="muted",
+            title="[muted] THINKING [/muted]",
             title_align="left",
             padding=(0, 1),
+            box=ROUNDED,
         )
     )
 
@@ -208,7 +225,10 @@ def render_tool_call(name: str, summary: str) -> None:
     if _subagent_count == 1:
         console.print(Text(f"  [{name}] {summary}", style="dim cyan"))
         return
-    console.print(Text(f"\n[{name}] {summary}", style="bold cyan"))
+    line = Text("\n  ◆ ", style="tool")
+    line.append(name, style="bold #a78bfa")
+    line.append(f"  {summary}", style="muted")
+    console.print(line)
 
 
 @_suppress_in_subagent
@@ -220,11 +240,12 @@ def render_tool(name: str, content: str) -> None:
         content = "\n".join(lines[:50]) + f"\n... ({len(lines) - 50} more lines)"
     console.print(
         Panel(
-            Text(content, style="yellow"),
-            border_style="yellow",
-            title=f"Tool: {name}",
+            Text(content, style="white"),
+            border_style="tool",
+            title=f"[bold #a78bfa] ◆ {name} [/bold #a78bfa]",
             title_align="left",
             padding=(0, 1),
+            box=ROUNDED,
         )
     )
 
@@ -232,62 +253,65 @@ def render_tool(name: str, content: str) -> None:
 @_suppress_in_subagent
 def render_error(message: str) -> None:
     """渲染错误信息"""
-    console.print(Text("Error: ", style="red bold"), Text(message, style="red bold"))
+    console.print(Text("  ✕  ", style="danger"), Text(message, style="danger"))
 
 
 @_suppress_in_subagent
 def render_info(message: str) -> None:
     """渲染信息"""
-    console.print(f"[cyan]{message}[/cyan]")
+    console.print(Text("  ●  ", style="accent"), Text(message, style="white"))
 
 
 @_suppress_in_subagent
 def render_success(message: str) -> None:
     """渲染成功信息"""
-    console.print(f"[green]{message}[/green]")
+    console.print(Text("  ✓  ", style="success"), Text(message, style="success"))
 
 
 @_suppress_in_subagent
 def render_warning(message: str) -> None:
     """渲染警告信息"""
-    console.print(f"[yellow]{message}[/yellow]")
+    console.print(Text("  !  ", style="warning"), Text(message, style="warning"))
 
 
 def render_separator() -> None:
     """渲染分隔线"""
-    console.print(Rule(style="dim"))
+    console.print(Rule(style="muted"))
 
 
 def render_welcome() -> None:
     """渲染欢迎信息"""
-    # cyan -> blue 渐变 logo，逐字符上色并加字间距
-    grad = [
-        "bright_cyan", "cyan", "cyan", "turquoise2",
-        "deep_sky_blue3", "dodger_blue1", "dodger_blue2",
-        "blue", "blue1", "blue",
-    ]
-    logo = Text()
-    for i, ch in enumerate("LorcyCode"):
-        logo.append(ch, style=f"bold {grad[i % len(grad)]}")
-        logo.append(" ")
-    subtitle = Text("Terminal-based AI Coding Agent", style="dim italic cyan")
+    logo = Text("LORCY", style="bold #5eead4")
+    logo.append(" / ", style="muted")
+    logo.append("CODE", style="bold #60a5fa")
+    subtitle = Text("Your terminal-native coding companion", style="muted")
 
     # 快捷键与命令（精简为常用项）
-    tips = Table.grid(padding=(0, 3))
-    tips.add_column(style="bold bright_cyan", justify="right", no_wrap=True)
-    tips.add_column(style="dim", justify="center", no_wrap=True, min_width=1)
-    tips.add_column(style="white", justify="left", no_wrap=True)
-    tips.add_row("Enter", "·", "发送消息")
-    tips.add_row("Ctrl+Enter", "·", "插入换行")
-    tips.add_row("Ctrl+C", "·", "中断生成")
-    tips.add_row("/help", "·", "查看命令")
-    tips.add_row("/quit", "·", "退出程序")
+    tips = Table.grid(padding=(0, 2))
+    tips.add_column(style="bold #60a5fa", justify="right", no_wrap=True)
+    tips.add_column(style="muted", justify="left", no_wrap=True)
+    tips.add_row("Enter", "发送")
+    tips.add_row("Ctrl+Enter", "换行")
+    tips.add_row("Ctrl+C", "中断")
+    tips.add_row("/help", "全部命令")
+
+    body = Table.grid(expand=True)
+    body.add_row(Align.center(logo))
+    body.add_row(Align.center(subtitle))
+    body.add_row("")
+    body.add_row(Align.center(tips))
 
     console.print()
-    console.print(Align.center(logo))
-    console.print(Align.center(subtitle))
-    console.print()
-    console.print(Align.center(tips))
+    console.print(
+        Panel(
+            body,
+            border_style="muted",
+            box=ROUNDED,
+            padding=(1, 3),
+            title="[brand] ✦ LORCY CODE [/brand]",
+            subtitle="[muted]输入 /help 开始探索[/muted]",
+        )
+    )
     console.print()
 
 

@@ -6,6 +6,7 @@ import lorcy_code.cli.display as _display
 from pathlib import Path
 from rich.console import Console
 from rich.text import Text
+from rich.box import SIMPLE_HEAVY
 
 from prompt_toolkit.styles import Style
 from prompt_toolkit import PromptSession
@@ -274,7 +275,7 @@ class ChatREPL:
                 status = "  │  ".join(parts)
                 ratelimit_line = ""
 
-                return HTML(f"<ansiblue>{sep}</ansiblue>\n{status}{ratelimit_line}")
+                return HTML(f'<style fg="#334155">{sep}</style>\n  {status}{ratelimit_line}')
             
             self._prompt_session:PromptSession = PromptSession(
                 history=LimitedFileHistory(str(Path.home() / ".lorcy" / "history")),
@@ -287,11 +288,11 @@ class ChatREPL:
                 refresh_interval=0.1,
                 style=Style.from_dict(
                     {
-                        "completion-menu.completion": "bg:#008888 #ffffff",
-                        "completion-menu.completion.current": "bg:#00aaaa #000000",
-                        "completion-menu.meta.completion": "bg:#008888 #ffffff",
-                        "completion-menu.meta.completion.current": "bg:#00aaaa #000000",
-                        "bottom-toolbar": "noreverse bg:#1a1a2e #aaaaaa",
+                        "completion-menu.completion": "bg:#111827 #cbd5e1",
+                        "completion-menu.completion.current": "bg:#0f766e #ffffff bold",
+                        "completion-menu.meta.completion": "bg:#111827 #7c8aa5",
+                        "completion-menu.meta.completion.current": "bg:#0f766e #ccfbf1",
+                        "bottom-toolbar": "noreverse bg:#0b1220 #7c8aa5",
                     }
                 ),
             )
@@ -310,11 +311,11 @@ class ChatREPL:
 
             width = shutil.get_terminal_size().columns # 获取终端大小的列数，确保分隔线始终覆盖整个宽度
             sep = "\u2500" * width # 即为 width个 ─ , 效果：───────────────（这个是输入框的顶栏，由于prompt_toolkit不支持顶栏，所以需要自己构造）
-            prompt_text = f"{sep}\n > " # 构造顶栏和 > 提示符
+            prompt_text = f'<style fg="#334155">{sep}</style>\n<style fg="#5eead4"><b>  ❯ </b></style>'
 
             # 使用 prompt-toolkit 获取输入（支持命令自动补全）
             result = await self._prompt_session.prompt_async( # 显示顶栏和 > 提示符，并等待用户输入，返回值也是用户的输入
-                HTML(f"<ansiblue>{prompt_text}</ansiblue>"),
+                HTML(prompt_text),
                 default=default_text, # 返回的默认值，代替用户输入或可能为空
             )
             return result
@@ -683,9 +684,15 @@ class ChatREPL:
     async def _cmd_tools(self, _arg: str) -> None:
         from lorcy_code.tools.registry import ALL_TOOLS
         from rich.table import Table
-        table = Table(title="内置工具")
-        table.add_column("工具", style="cyan")
-        table.add_column("说明")
+        table = Table(
+            title="◆ 内置工具",
+            box=SIMPLE_HEAVY,
+            border_style="muted",
+            header_style="bold #60a5fa",
+            row_styles=["", "dim"],
+        )
+        table.add_column("工具", style="tool", no_wrap=True)
+        table.add_column("说明", style="white")
 
         for t in ALL_TOOLS:
             name = t.name
@@ -700,10 +707,15 @@ class ChatREPL:
     
     async def _cmd_help(self, _arg: str) -> None:
         from rich.table import Table
-
-        table = Table(title="命令列表")
-        table.add_column("命令", style="cyan")
-        table.add_column("说明")
+        table = Table(
+            title="✦ 命令列表",
+            box=SIMPLE_HEAVY,
+            border_style="muted",
+            header_style="bold #60a5fa",
+            row_styles=["", "dim"],
+        )
+        table.add_column("命令", style="brand", no_wrap=True)
+        table.add_column("说明", style="white")
         for cmd, desc in SLASH_COMMANDS.items():
             table.add_row(cmd, desc)
         console.print(table)
