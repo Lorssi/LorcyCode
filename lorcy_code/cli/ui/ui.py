@@ -1472,7 +1472,7 @@ class ChatREPL:
         if action is None:
             return
         self.yolo = "Yolo" in action
-        from lorcy_code.core.agent.main_agent import update_hitl_config
+        from lorcy_code.core.agent.middleware import update_hitl_config
 
         update_hitl_config(self.yolo)
         mode_str = "Yolo" if self.yolo else "Common"
