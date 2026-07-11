@@ -11,7 +11,6 @@ from rich.text import Text
 from rich.rule import Rule
 from rich.live import Live
 from rich._spinners import SPINNERS
-from rich.align import Align
 from rich.table import Table
 from rich.theme import Theme
 from rich.box import ROUNDED
@@ -279,27 +278,66 @@ def render_separator() -> None:
     console.print(Rule(style="muted"))
 
 
-def render_welcome() -> None:
-    """渲染欢迎信息"""
-    logo = Text("LORCY", style="bold #5eead4")
-    logo.append(" / ", style="muted")
-    logo.append("CODE", style="bold #60a5fa")
-    subtitle = Text("Your terminal-native coding companion", style="muted")
+def render_welcome(
+    *,
+    model: str | None = None,
+    workdir: str | None = None,
+    yolo: bool = False,
+) -> None:
+    """渲染 Claude Code 风格的横向欢迎卡片。"""
+    from lorcy_code import __version__
 
-    # 快捷键与命令（精简为常用项）
-    tips = Table.grid(padding=(0, 2))
-    tips.add_column(style="bold #60a5fa", justify="right", no_wrap=True)
-    tips.add_column(style="muted", justify="left", no_wrap=True)
-    tips.add_row("Enter", "发送")
-    tips.add_row("Ctrl+Enter", "换行")
-    tips.add_row("Ctrl+C", "中断")
-    tips.add_row("/help", "全部命令")
+    glyphs = {
+        "L": ("█    ", "█    ", "█    ", "█    ", "█████"),
+        "O": (" ███ ", "█   █", "█   █", "█   █", " ███ "),
+        "R": ("████ ", "█   █", "████ ", "█  █ ", "█   █"),
+        "C": (" ████", "█    ", "█    ", "█    ", " ████"),
+        "D": ("████ ", "█   █", "█   █", "█   █", "████ "),
+        "E": ("█████", "█    ", "████ ", "█    ", "█████"),
+        "Y": ("█   █", " █ █ ", "  █  ", "  █  ", "  █  "),
+    }
+    wordmark = "LORCY CODE"
+    colors = (
+        "#5eead4", "#4adecf", "#38d0dd", "#22c3ee", "#38bdf8",
+        "#4eaffb", "#60a5fa", "#718ff7", "#818cf8",
+    )
+    # 文本内部必须左对齐；逐行居中会根据行尾空白重新计算宽度，造成块字左右抖动。
+    mark = Text(justify="left", no_wrap=True)
+    for row in range(5):
+        color_index = 0
+        for index, letter in enumerate(wordmark):
+            if letter == " ":
+                mark.append("   ")
+            else:
+                # 所有字形严格占五列，样式只作用于块字符，不使用背景色。
+                mark.append(glyphs[letter][row], style=f"bold {colors[color_index]}")
+                color_index += 1
+            if index < len(wordmark) - 1 and wordmark[index + 1] != " ":
+                mark.append(" ")
+        if row < 4:
+            mark.append("\n")
 
-    body = Table.grid(expand=True)
-    body.add_row(Align.center(logo))
-    body.add_row(Align.center(subtitle))
-    body.add_row("")
-    body.add_row(Align.center(tips))
+    info = Table.grid(padding=(0, 1))
+    info.add_column(style="muted", no_wrap=True)
+    info.add_column(style="white", overflow="ellipsis")
+
+    heading = Text("Lorcy Code", style="bold white")
+    heading.append(f"  v{__version__}", style="muted")
+    info.add_row(heading, "")
+    info.add_row("模型", model or "未配置")
+    mode = Text("Yolo", style="danger") if yolo else Text("Common", style="success")
+    info.add_row("模式", mode)
+    if workdir:
+        info.add_row("目录", Text(workdir, overflow="ellipsis", no_wrap=True))
+    info.add_row("提示", Text("/help 查看命令  ·  Ctrl+C 中断", style="accent"))
+
+    divider = Text("│\n│\n│\n│\n│", style="#334155", justify="center")
+
+    body = Table.grid(expand=True, padding=(0, 2))
+    body.add_column(width=58, justify="center", vertical="middle", no_wrap=True)
+    body.add_column(width=1, justify="center", vertical="middle", no_wrap=True)
+    body.add_column(ratio=1, vertical="middle")
+    body.add_row(mark, divider, info)
 
     console.print()
     console.print(
@@ -307,9 +345,9 @@ def render_welcome() -> None:
             body,
             border_style="muted",
             box=ROUNDED,
-            padding=(1, 3),
-            title="[brand] ✦ LORCY CODE [/brand]",
-            subtitle="[muted]输入 /help 开始探索[/muted]",
+            padding=(1, 2),
+            title="[brand] Welcome back [/brand]",
+            subtitle="[muted]terminal-native coding agent[/muted]",
         )
     )
     console.print()

@@ -194,7 +194,11 @@ class ChatREPL:
             self._git_cp_count = self.git_manager.count_checkpoints() # 记录提交数
 
     async def run(self):
-        render_welcome()
+        render_welcome(
+            model=self.model_config.get("model"),
+            workdir=str(self.workplace_path) if self.workplace_path else None,
+            yolo=self.yolo,
+        )
 
         while True:
             try:
@@ -678,7 +682,11 @@ class ChatREPL:
         reset_budget_state()
         self.session_mgr.new_session()
         # render_success("新会话已开始")
-        render_welcome()
+        render_welcome(
+            model=self.model_config.get("model"),
+            workdir=str(self.workplace_path) if self.workplace_path else None,
+            yolo=self.yolo,
+        )
         # self._render_status_bar()
 
     async def _cmd_tools(self, _arg: str) -> None:
