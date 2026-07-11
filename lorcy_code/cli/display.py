@@ -1,0 +1,373 @@
+"""
+Rich 输出渲染 — Markdown、流式输出、状态栏、消息样式
+"""
+
+from __future__ import annotations
+
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.text import Text
+from rich.rule import Rule
+from rich.live import Live
+from rich._spinners import SPINNERS
+from rich.align import Align
+from rich.table import Table
+
+import asyncio
+import contextvars
+import threading
+import time
+
+_subagent_count = 0
+_subagent_count_lock = threading.Lock()
+_subagent_parallel = False
+
+_current_agent_tag: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_current_agent_tag", default=None
+)
+_agent_progress: dict[str, dict] = {}
+_agent_progress_lock = threading.Lock()
+_progress_live: Live | None = None
+_progress_task: asyncio.Task | None = None
+
+_DOTS = SPINNERS["dots"]["frames"]
+_DOTS_MS = SPINNERS["dots"]["interval"]
+
+console = Console()
+
+
+def _suppress_in_subagent(fn):
+    """Decorator: suppress output when subagents are active (parallel or count > 0)."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if _subagent_parallel or _subagent_count > 0:
+            return
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+# ─── 消息渲染 ──────────────────────────────────────────
+
+
+def render_human(message: str) -> None:
+    """渲染用户消息"""
+    console.print(
+        Panel(
+            Markdown(message),
+            border_style="blue",
+            title="You",
+            title_align="right",
+            padding=(0, 1),
+        )
+    )
+
+
+@_suppress_in_subagent
+def render_ai_chunk(content: str) -> None:
+    """渲染 AI 回复片段（流式）"""
+    console.print(content, end="", style="white")
+
+
+def render_ai_start():
+    """AI 回复开始"""
+    global _subagent_parallel
+    if _subagent_count == 0:
+        _finalize_progress()
+        with _agent_progress_lock:
+            _agent_progress.clear()
+    _subagent_parallel = False
+    if _subagent_count > 0:
+        return
+    console.print()
+
+
+@_suppress_in_subagent
+def render_ai_end() -> None:
+    """AI 回复结束"""
+    console.print()
+
+
+@_suppress_in_subagent
+def render_reasoning(reasoning: str) -> None:
+    """渲染推理/思考内容（灰色斜体，折叠）"""
+    console.print(
+        Panel(
+            Text(reasoning, style="dim italic"),
+            border_style="dim",
+            title="Thinking",
+            title_align="left",
+            padding=(0, 1),
+        )
+    )
+
+
+def _start_progress():
+    global _progress_live
+    if _progress_live is None:
+        _live_console = Console(file=console.file)
+        _progress_live = Live("", transient=False, console=_live_console, refresh_per_second=12)
+        _progress_live.start()
+
+
+def _update_progress():
+    if not _progress_live:
+        return
+    with _agent_progress_lock:
+        if not _agent_progress:
+            _progress_live.update("")
+            return
+        frame = _DOTS[int(time.time() * 1000 / _DOTS_MS) % len(_DOTS)]
+        lines = []
+        for tag, info in _agent_progress.items():
+            calls = info.get("calls", 0)
+            calls_str = f" ({calls} calls)" if calls else ""
+            if info.get("failed"):
+                lines.append(f"  [red]✗ {tag}[/red]{calls_str}")
+            elif info.get("done"):
+                lines.append(f"  [green]✓ {tag}[/green]{calls_str}")
+            else:
+                lines.append(f"  [cyan]{frame}[/cyan] {tag}{calls_str}")
+    _progress_live.update("\n".join(lines))
+
+
+async def _progress_updater():
+    try:
+        while True:
+            await asyncio.sleep(_DOTS_MS / 1000)
+            if _progress_live is None:
+                break
+            _update_progress()
+    except asyncio.CancelledError:
+        pass
+
+
+async def _result_spinner_updater():
+    try:
+        while True:
+            await asyncio.sleep(_DOTS_MS / 1000)
+            if _progress_live is None:
+                break
+            frame = _DOTS[int(time.time() * 1000 / _DOTS_MS) % len(_DOTS)]
+            _progress_live.update(f"  [cyan]{frame}[/cyan] 正在整理结果...")
+    except asyncio.CancelledError:
+        pass
+
+
+def _start_result_spinner():
+    """单 agent 完成后，显示整理结果的加载圈"""
+    global _progress_live, _progress_task
+    if _progress_live is None:
+        _live_console = Console(file=console.file)
+        _progress_live = Live("", transient=False, console=_live_console, refresh_per_second=12)
+        _progress_live.start()
+    if _progress_task is None or _progress_task.done():
+        _progress_task = asyncio.ensure_future(_result_spinner_updater())
+
+
+def _finalize_progress():
+    """停止进度显示并清理资源"""
+    global _progress_live, _progress_task
+
+    if _progress_task is not None and not _progress_task.done():
+        _progress_task.cancel()
+        _progress_task = None
+
+    if _progress_live is not None:
+        _update_progress()
+        _progress_live.stop()
+        _progress_live = None
+
+    with _agent_progress_lock:
+        _agent_progress.clear()
+
+
+def force_reset_display() -> None:
+    """异常退出时强制重置所有显示状态"""
+    global _subagent_count, _subagent_parallel
+    _subagent_count = 0
+    _subagent_parallel = False
+    console.quiet = False
+    _finalize_progress()
+
+
+def render_tool_call(name: str, summary: str) -> None:
+    tag = _current_agent_tag.get()
+    if tag:
+        with _agent_progress_lock:
+            if tag in _agent_progress:
+                _agent_progress[tag]["calls"] += 1
+        return
+    if _subagent_parallel:
+        return
+    if len(summary) > 120:
+        summary = summary[:117] + "..."
+    if _subagent_count == 1:
+        console.print(Text(f"  [{name}] {summary}", style="dim cyan"))
+        return
+    console.print(Text(f"\n[{name}] {summary}", style="bold cyan"))
+
+
+@_suppress_in_subagent
+def render_tool(name: str, content: str) -> None:
+    """渲染工具调用结果"""
+    # 截断过长内容
+    lines = content.split("\n")
+    if len(lines) > 50:
+        content = "\n".join(lines[:50]) + f"\n... ({len(lines) - 50} more lines)"
+    console.print(
+        Panel(
+            Text(content, style="yellow"),
+            border_style="yellow",
+            title=f"Tool: {name}",
+            title_align="left",
+            padding=(0, 1),
+        )
+    )
+
+
+@_suppress_in_subagent
+def render_error(message: str) -> None:
+    """渲染错误信息"""
+    console.print(Text("Error: ", style="red bold"), Text(message, style="red bold"))
+
+
+@_suppress_in_subagent
+def render_info(message: str) -> None:
+    """渲染信息"""
+    console.print(f"[cyan]{message}[/cyan]")
+
+
+@_suppress_in_subagent
+def render_success(message: str) -> None:
+    """渲染成功信息"""
+    console.print(f"[green]{message}[/green]")
+
+
+@_suppress_in_subagent
+def render_warning(message: str) -> None:
+    """渲染警告信息"""
+    console.print(f"[yellow]{message}[/yellow]")
+
+
+def render_separator() -> None:
+    """渲染分隔线"""
+    console.print(Rule(style="dim"))
+
+
+def render_welcome() -> None:
+    """渲染欢迎信息"""
+    # cyan -> blue 渐变 logo，逐字符上色并加字间距
+    grad = [
+        "bright_cyan", "cyan", "cyan", "turquoise2",
+        "deep_sky_blue3", "dodger_blue1", "dodger_blue2",
+        "blue", "blue1", "blue",
+    ]
+    logo = Text()
+    for i, ch in enumerate("LorcyCode"):
+        logo.append(ch, style=f"bold {grad[i % len(grad)]}")
+        logo.append(" ")
+    subtitle = Text("Terminal-based AI Coding Agent", style="dim italic cyan")
+
+    # 快捷键与命令（精简为常用项）
+    tips = Table.grid(padding=(0, 3))
+    tips.add_column(style="bold bright_cyan", justify="right", no_wrap=True)
+    tips.add_column(style="dim", justify="center", no_wrap=True, min_width=1)
+    tips.add_column(style="white", justify="left", no_wrap=True)
+    tips.add_row("Enter", "·", "发送消息")
+    tips.add_row("Ctrl+Enter", "·", "插入换行")
+    tips.add_row("Ctrl+C", "·", "中断生成")
+    tips.add_row("/help", "·", "查看命令")
+    tips.add_row("/quit", "·", "退出程序")
+
+    console.print()
+    console.print(Align.center(logo))
+    console.print(Align.center(subtitle))
+    console.print()
+    console.print(Align.center(tips))
+    console.print()
+
+
+# ─── 消息列表渲染（加载历史） ─────────────────────────────
+
+
+def render_conversation(messages: list) -> None:
+    """渲染完整对话历史"""
+    top_flag = True
+    for i, message in enumerate(messages):
+        if message.additional_kwargs.get("hide", ""):
+            continue
+        msg_type = message.type
+        content = message.content
+        from lorcy_code.shared.text import get_text_content
+        content = get_text_content(content)
+
+        if msg_type == "human":
+            if top_flag:
+                top_flag = False
+            else:
+                render_separator()
+            render_human(content or "")
+
+        elif msg_type == "ai":
+            reasoning = message.additional_kwargs.get("reasoning")
+            if reasoning:
+                render_reasoning(reasoning)
+            if content:
+                render_ai_start()
+                console.print(Markdown(content))
+                render_ai_end()
+
+        elif msg_type == "tool":
+            if content:
+                render_tool(message.name or "tool", content)
+
+    console.print()
+
+
+# ─── 上下文用量 ──────────────────────────────────────────
+
+
+def _format_tokens(n: int) -> str:
+    """格式化 token 数：123456 → 123.5K"""
+    if n >= 1000:
+        return f"{n / 1000:.1f}K"
+    return str(n)
+
+
+def get_context_usage_text(messages: list, max_context: int) -> str:
+    """
+    从消息列表计算上下文占用，返回带样式的文本。
+
+    取最后一次 AIMessage 的 input_tokens 作为上下文快照
+    （因为每次请求的 input_tokens 包含了完整上下文）。
+    """
+    input_tokens = 0
+    for message in reversed(messages):
+        from langchain_core.messages import AIMessage
+
+        if isinstance(message, AIMessage):
+            usage = message.usage_metadata
+            if usage and usage.get("input_tokens"):
+                input_tokens = usage["input_tokens"]
+                break
+
+    if input_tokens == 0:
+        return ""
+
+    pct = input_tokens / max_context
+    used_str = _format_tokens(input_tokens)
+    max_str = _format_tokens(max_context)
+    pct_str = f"{pct * 100:.0f}%"
+
+    if pct < 0.7:
+        style = "yellow"
+    elif pct < 0.9:
+        style = "bold yellow"
+    else:
+        style = "bold red"
+
+    return f"[{style}]{used_str}/{max_str} {pct_str}[/{style}]"

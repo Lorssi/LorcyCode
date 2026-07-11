@@ -1,7 +1,7 @@
 [project]
 name = "lorcy_code"
 version = "0.1.0"
-description = "Add your description here"
+description = "Terminal-based AI coding agent with skills, tools, sessions, and Git checkpoints"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -25,11 +25,18 @@ dependencies = [
 ]
 
 [project.scripts]
-lorcy_code = "lorcy_code.main:app"
+lorcy_code = "lorcy_code.cli.app:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "typer>=0.15.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"  # 清华源（默认）
