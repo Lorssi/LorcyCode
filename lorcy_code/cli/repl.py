@@ -539,6 +539,12 @@ class ChatREPL:
         deleted = await self._cleanup_last_turn(f"Agent 执行错误: {error}")
         # 如果没有删除整组（已有 AIMessage），错误消息已在 _cleanup_last_turn 中追加
 
+    async def _handle_cancel(self, user_input: str) -> None:
+        """取消时：当前组无 AIMessage 则删除整组并回填输入框，否则追加停止消息"""
+        deleted = await self._cleanup_last_turn("该消息意外停止")
+        if deleted is not None:
+            self._interrupt_buffer = user_input.strip()
+
     # --------------------------------------------------------------------------------
     # 中断处理
     # --------------------------------------------------------------------------------
