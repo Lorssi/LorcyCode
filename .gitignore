@@ -12,5 +12,4 @@ wheels/
 # Config
 .chat/
 .lorcy/
-
-lorcy_code/data
+.pytest_cache/
