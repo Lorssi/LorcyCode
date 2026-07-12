@@ -168,10 +168,9 @@ async def run_subagent(
         extra={"system_prompt": agent_def.system_prompt},
     )
 
-    from lorcy_code.agents.middleware import handle_tool_errors, emit_tool_events
+    from lorcy_code.agents.middleware import handle_tool_errors
 
     middleware = [
-        emit_tool_events,
         _display_subagent_tools,
         handle_tool_errors,
         _tool_result_budget,
