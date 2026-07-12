@@ -1,4 +1,8 @@
 {
     "mode": "selected",
-    "skills": []
+    "skills": [
+        "risk-alert-evaluation-diagnosis",
+        "risk-alert-modeling",
+        "risk-alert-training-debugging"
+    ]
 }
