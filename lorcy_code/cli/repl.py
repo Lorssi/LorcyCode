@@ -2,6 +2,7 @@ import shutil
 import asyncio
 import openai
 import os
+import re
 import lorcy_code.cli.display as _display
 from pathlib import Path
 from rich.console import Console
