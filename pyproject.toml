@@ -3,7 +3,7 @@ name = "lorcy_code"
 version = "0.1.0"
 description = "Terminal-based AI coding agent with skills, tools, sessions, and Git checkpoints"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "typer>=0.15.0",
     "rich>=13.9.0",
@@ -22,7 +22,20 @@ dependencies = [
     "aiofiles>=25.1.0",
     "psutil>=6.0.0",
     "pillow>=12.2.0",
+    # wk2 dependencies
+    "langchain-community>=0.4.1",
+    "dataclasses-json>=0.6.7",
+    "faiss-cpu>=1.13.2",
+    "transformers>=4.57.0",
+    "torch>=2.7.1",
+    "torchvision>=0.22.0",
+    "torchaudio>=2.7.1",
+    "tqdm>=4.67.1",
+    "scikit-learn>=1.7.2",
+    "pandas>=2.3.3",
+    "numpy>=2.1.3",
 ]
+
 
 [project.scripts]
 lorcy_code = "lorcy_code.cli.app:app"
@@ -34,9 +47,20 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = ["pytest>=8.0", "typer>=0.15.0"]
 
+# PyTorch GPU 版本配置（从第一个文件合并）
+[tool.uv.sources]
+torch = { index = "pytorch-cu118" }
+torchaudio = { index = "pytorch-cu118" }
+torchvision = { index = "pytorch-cu118" }
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
 
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"  # 清华源（默认）

@@ -1,6 +1,7 @@
 """
 会话管理 — thread_id, checkpointer DB, 历史会话列表/加载/删除/重命名
 """
+from __future__ import annotations
 
 import asyncio
 import json
