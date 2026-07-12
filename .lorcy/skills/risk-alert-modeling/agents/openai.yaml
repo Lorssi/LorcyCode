@@ -1,0 +1,6 @@
+interface:
+  display_name: "Risk Alert Modeling"
+  short_description: "Design PRRS risk alert model architectures"
+  default_prompt: "Use $risk-alert-modeling to design a feasible PRRS risk alert model architecture."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Risk Alert Experience Retrieval"
+  short_description: "Retrieve past risk alert optimization lessons"
+  default_prompt: "Use $risk-alert-experience-retrieval to search historical risk alert optimization experience."
+policy:
+  allow_implicit_invocation: true

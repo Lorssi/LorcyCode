@@ -1,0 +1,6 @@
+interface:
+  display_name: "Risk Alert Training Debugging"
+  short_description: "Parameterize and archive risk-alert model runs"
+  default_prompt: "Use $risk-alert-training-debugging to generate a parameterized model, execute it, archive its run, and repair failures."
+policy:
+  allow_implicit_invocation: true

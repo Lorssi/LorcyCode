@@ -1,0 +1,6 @@
+interface:
+  display_name: "Risk Alert Evaluation Diagnosis"
+  short_description: "Evaluate and diagnose archived risk-alert runs"
+  default_prompt: "Use $risk-alert-evaluation-diagnosis to evaluate a model_v_* run directory and recommend the next iteration."
+policy:
+  allow_implicit_invocation: true
