@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING
 
 from rich.panel import Panel
 from rich.markdown import Markdown
+from rich import box
 from rich.table import Table
+from rich.text import Text
 
 from lorcy_code.cli.display import console
 from lorcy_code.cli.prompts import select, confirm, text, checkbox
@@ -90,22 +92,51 @@ def render_workspace_skill_table(session: SessionManager) -> list[dict]:
         console.print("[yellow]没有发现已安装的技能[/yellow]")
         return skills
 
-    table = Table(title="工作区技能")
-    table.add_column("名称", style="cyan")
-    table.add_column("状态", style="green")
-    table.add_column("范围", style="green")
-    table.add_column("描述", style="white")
-    table.add_column("路径", style="dim")
+    enabled_count = sum(bool(skill.get("enabled")) for skill in skills)
+    table = Table(
+        title="[bold brand]Skills[/bold brand]  [muted]当前工作区[/muted]",
+        title_style="",
+        caption=(
+            f"[success]● {enabled_count} 已启用[/success]  "
+            f"[muted]○ {len(skills) - enabled_count} 已禁用 · 共 {len(skills)} 个[/muted]"
+        ),
+        caption_justify="left",
+        caption_style="",
+        box=box.ROUNDED,
+        border_style="muted",
+        header_style="bold #cbd5e1",
+        row_styles=("", "on #111827"),
+        padding=(0, 1),
+        collapse_padding=True,
+        expand=True,
+    )
+    table.add_column("技能", style="bold cyan", no_wrap=True, min_width=14)
+    table.add_column("状态", justify="center", no_wrap=True, width=9)
+    table.add_column("范围", justify="center", no_wrap=True, width=6)
+    table.add_column("描述", style="white", ratio=3, overflow="ellipsis")
+    table.add_column("位置", style="muted", ratio=2, overflow="ellipsis")
     for s in skills:
-        desc = s["description"]
-        if len(desc) > 60:
-            desc = desc[:57] + "..."
+        enabled = bool(s.get("enabled"))
+        status = Text("● 已启用" if enabled else "○ 已禁用")
+        status.stylize("success" if enabled else "muted")
+        scope = Text(f"{'◆' if s['type'] == '项目' else '◇'} {s['type']}")
+        scope.stylize("accent" if s["type"] == "项目" else "tool")
+
+        path = Path(s["path"])
+        try:
+            display_path = f"./{path.relative_to(session.workplace_path).as_posix()}"
+        except ValueError:
+            try:
+                display_path = f"~/{path.relative_to(Path.home()).as_posix()}"
+            except ValueError:
+                display_path = str(path)
+
         table.add_row(
-            s["name"],
-            "已启用" if s.get("enabled") else "已禁用",
-            s["type"],
-            desc,
-            str(s["path"]),
+            Text(str(s["name"]), style="bold cyan", overflow="ellipsis"),
+            status,
+            scope,
+            Text(str(s["description"] or "暂无描述"), overflow="ellipsis"),
+            Text(display_path, style="muted", overflow="ellipsis"),
         )
     console.print(table)
     return skills
