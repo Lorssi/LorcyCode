@@ -87,14 +87,23 @@ def render_ai_chunk(content: str) -> None:
     console.print(content, end="", style="white")
 
 
-def render_ai_start():
-    """AI 回复开始"""
+def begin_model_output() -> None:
+    """Prepare the terminal for visible reasoning or answer output.
+
+    A completed single sub-agent leaves a Live result spinner running while the
+    parent model starts composing its response.  Stop that Live display before
+    writing *any* model text; otherwise Rich redraws the spinner through the
+    streamed reasoning chunks.
+    """
     global _subagent_parallel
     if _subagent_count == 0:
         _finalize_progress()
-        with _agent_progress_lock:
-            _agent_progress.clear()
     _subagent_parallel = False
+
+
+def render_ai_start():
+    """AI 回复开始"""
+    begin_model_output()
     if _subagent_count > 0:
         return
     console.print()
@@ -208,6 +217,12 @@ def force_reset_display() -> None:
     _subagent_parallel = False
     console.quiet = False
     _finalize_progress()
+
+
+def finalize_turn_display() -> None:
+    """Clean up display resources left behind at the end of a turn."""
+    if _subagent_count == 0:
+        _finalize_progress()
 
 
 def render_tool_call(name: str, summary: str) -> None:

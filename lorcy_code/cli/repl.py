@@ -382,6 +382,7 @@ class ChatREPL:
                                         not _display._subagent_parallel
                                         and _display._subagent_count == 0
                                     ):
+                                        _display.begin_model_output()
                                         console.print(reasoning, end="", style="dim")
                                 if not ai_started:
                                     if not content:
@@ -467,6 +468,7 @@ class ChatREPL:
             asyncio.create_task(self._post_process())
 
         finally:
+            _display.finalize_turn_display()
             self._processing = False
 
     async def _post_process(self) -> None:
