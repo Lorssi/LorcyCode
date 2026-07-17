@@ -34,13 +34,17 @@ def build_agent(
     model_config: dict | None = None,
     checkpointer: AsyncSqliteSaver | None = None,
     yolo: bool = False,
+    tools: list | None = None,
 ) -> object:
     """构建 agent 实例"""
     global _summarization_model
     cfg = model_config
     model = _dummy_model()
 
-    _hitl_middleware = AsyncHITL(interrupt_on=_build_interrupt_on(yolo))
+    effective_tools = tools if tools is not None else ALL_TOOLS
+    _hitl_middleware = AsyncHITL(
+        interrupt_on=_build_interrupt_on(yolo, effective_tools)
+    )
     _summarization_model = EnhancedChatOpenAI(**cfg)
 
     # 加载 fallback 模型配置
@@ -56,7 +60,7 @@ def build_agent(
 
     agent = create_agent(
         model=model,
-        tools=ALL_TOOLS,
+        tools=effective_tools,
         middleware=[
             restrict_agent_type,
             handle_tool_errors,

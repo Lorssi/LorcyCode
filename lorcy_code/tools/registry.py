@@ -692,6 +692,7 @@ async def agent(
             skill_loader=skill_loader,
             timeout_seconds=timeout_seconds,
             description=description,
+            extra_tools=runtime.context.extra.get("mcp_tools", []),
         )
 
         with _display._agent_progress_lock:

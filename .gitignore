@@ -13,3 +13,4 @@ wheels/
 .chat/
 .lorcy/
 .pytest_cache/
+.pytest-tmp*/

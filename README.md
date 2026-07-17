@@ -95,7 +95,8 @@ lorcy_code gui
 | `/mode` | 在 Common 和 Yolo 模式间切换 |
 | `/git` | 查看 Git 和检查点状态 |
 | `/workdir` | 切换当前工作目录 |
-| `/tools` | 显示可用内置工具 |
+| `/tools` | 显示内置与 MCP 工具 |
+| `/mcp` | 添加、删除、启停、测试和刷新 MCP 服务 |
 | `/help` | 显示帮助 |
 | `/quit` | 退出程序 |
 
@@ -112,6 +113,36 @@ Agent 可使用以下工具：
 
 Shell 输出和工具结果会自动截断并保存过长内容，避免占满模型上下文。
 
+## MCP 工具
+
+LorcyCode 支持本地 `stdio` 和远程 `Streamable HTTP` MCP 服务，并兼容 Claude
+等客户端使用的 `mcpServers` JSON。第三方提供的配置可以直接复制到
+`~/.lorcy/mcp.json` 或项目的 `.lorcy/mcp.json`。执行 `/mcp`
+进入交互管理，也可以使用 `/mcp list`、`/mcp add`、`/mcp enable <name>`、
+`/mcp disable <name>`、`/mcp test <name>` 和 `/mcp tools <name>`。
+
+用户级配置位于 `~/.lorcy/mcp.json`，项目级配置位于 `.lorcy/mcp.json`；同名时
+项目配置完整覆盖用户配置。远程凭据必须通过 `${env:NAME}` 引用，例如：
+
+```json
+{
+  "mcpServers": {
+    "cloud": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": {"Authorization": "Bearer ${env:CLOUD_MCP_TOKEN}"}
+    }
+  }
+}
+```
+
+带 `command` 的服务会自动识别为 `stdio`，无需额外填写 `transport`。LorcyCode
+仍兼容早期的 `version + servers` 格式，但新配置默认保存为通用格式。明文 `env`
+可以读取以兼容第三方示例，不过会显示安全提示；建议将真实密钥替换为
+`${env:NAME}`。
+
+项目级 `stdio` 配置首次运行以及可执行配置发生变化时会要求确认信任。
+
 ## 配置与数据目录
 
 用户级配置位于 `~/.lorcy`：
@@ -119,6 +150,7 @@ Shell 输出和工具结果会自动截断并保存过长内容，避免占满�
 ```text
 ~/.lorcy/
 ├── model.json          # 默认模型和备用模型配置
+├── mcp.json            # 用户级 MCP 服务
 └── lorcyagent.json     # 最近使用的工作目录等设置
 ```
 
@@ -128,6 +160,7 @@ Shell 输出和工具结果会自动截断并保存过长内容，避免占满�
 .lorcy/
 ├── sessions/           # SQLite 检查点、会话名称和历史数据
 ├── skills/             # 当前工作区安装的技能
+├── mcp.json             # 项目级 MCP 服务
 └── skill_selection.json
 ```
 
@@ -143,6 +176,7 @@ lorcy_code/
 ├── cli/
 ├── config/
 ├── integrations/
+├── mcp/
 ├── sessions/
 ├── shared/
 ├── skills/

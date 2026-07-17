@@ -149,11 +149,22 @@ async def run_subagent(
     skill_loader: SkillLoader,
     timeout_seconds: int = 300,
     description: str = "",
+    extra_tools: list | None = None,
 ) -> tuple[str, bool]:
     timeout_seconds = max(timeout_seconds, 300)
     from lorcy_code.tools.registry import ALL_TOOLS
 
-    filtered_tools = _resolve_tools(agent_def, ALL_TOOLS)
+    # MCP tools are opt-in for custom agents. Built-in agents use tools=None and
+    # therefore continue to receive only the built-in registry.
+    allowed_extra = (
+        []
+        if agent_def.tools is None
+        else [
+            tool for tool in (extra_tools or [])
+            if getattr(tool, "name", "") in agent_def.tools
+        ]
+    )
+    filtered_tools = _resolve_tools(agent_def, [*ALL_TOOLS, *allowed_extra])
 
     cfg = dict(model_config)
     if agent_def.model:

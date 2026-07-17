@@ -176,21 +176,37 @@ class AsyncHITL(HumanInTheLoopMiddleware):
     
 _hitl_middleware: AsyncHITL | None = None
 
-def _build_interrupt_on(yolo: bool) -> dict:
-    return (
-        {}
-        if yolo
-        else {
-            "bash": {"allowed_decisions": ["approve", "reject"]},
-            "edit": {"allowed_decisions": ["approve", "reject"]},
-            "write_file": {"allowed_decisions": ["approve", "reject"]},
-        }
-    )
+_active_tools: list = []
 
-def update_hitl_config(yolo: bool) -> None:
+
+def _build_interrupt_on(yolo: bool, tools: list | None = None) -> dict:
+    global _active_tools
+    if tools is not None:
+        _active_tools = tools
+    if yolo:
+        return {}
+    result = {
+        "bash": {"allowed_decisions": ["approve", "reject"]},
+        "edit": {"allowed_decisions": ["approve", "reject"]},
+        "write_file": {"allowed_decisions": ["approve", "reject"]},
+    }
+    for tool in _active_tools:
+        name = getattr(tool, "name", "")
+        if not name.startswith("mcp__"):
+            continue
+        metadata = getattr(tool, "metadata", None) or {}
+        read_only = metadata.get("readOnlyHint", metadata.get("read_only_hint", False))
+        if read_only is not True:
+            result[name] = {"allowed_decisions": ["approve", "reject"]}
+    return result
+
+def update_hitl_config(yolo: bool, tools: list | None = None) -> None:
     """运行时更新 HITL interrupt_on 配置，无需重建 agent"""
+    global _active_tools
+    if tools is not None:
+        _active_tools = tools
     if _hitl_middleware is not None:
-        _hitl_middleware.interrupt_on = _build_interrupt_on(yolo)
+        _hitl_middleware.interrupt_on = _build_interrupt_on(yolo, _active_tools)
     from lorcy_code.tools.registry import update_agent_tool_desc
     update_agent_tool_desc(yolo)
 

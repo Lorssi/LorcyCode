@@ -10,7 +10,8 @@ SLASH_COMMANDS = {
     "/new": "新会话", "/history": "历史会话", "/model": "模型管理（新建/编辑/切换）",
     "/messages": "管理历史消息（编辑/分叉/删除）", "/compress": "压缩会话",
     "/skill": "技能启用与管理", "/mode": "模式切换（Common/Yolo）", "/git": "Git 状态",
-    "/workdir": "切换工作目录", "/tools": "显示内置工具", "/help": "显示帮助", "/quit": "退出",
+    "/workdir": "切换工作目录", "/tools": "显示可用工具", "/mcp": "MCP 服务管理",
+    "/help": "显示帮助", "/quit": "退出",
 }
 _TAG_SPLIT = re.compile(r"(\[/?[^\]]+\])")
 _TAG_OPEN = re.compile(r"^\[([^\]]+)\]$")

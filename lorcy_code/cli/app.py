@@ -19,6 +19,7 @@ async def _run_agent(*, yolo: bool = False) -> None:
     try:
         ok = await repl.initialize()
     except Exception:
+        await repl.close()
         console.print_exception()
         raise typer.Exit(1)
     
@@ -26,7 +27,10 @@ async def _run_agent(*, yolo: bool = False) -> None:
         console.print("[red]初始化失败[/red]")
         raise typer.Exit(1)
     
-    await repl.run()
+    try:
+        await repl.run()
+    finally:
+        await repl.close()
 
 @app.callback(invoke_without_command=True)
 def main(

@@ -91,6 +91,7 @@ class ChatREPL:
         self._skill_loader: SkillLoader | None = None # SkillLoader 复用，避免每条消息重建
 
         self.session_mgr: SessionManager | None = None  # 会话管理器
+        self.mcp_manager = None  # MCP 连接与动态工具目录
 
     def _create_skill_loader(self) -> SkillLoader:
         from lorcy_code.config.storage import load_skill_selection
@@ -131,6 +132,25 @@ class ChatREPL:
             finally:
                 self.checkpointer = None
 
+    async def close(self) -> None:
+        """关闭会话相关的外部资源。"""
+        if self.mcp_manager is not None:
+            await self.mcp_manager.close()
+            self.mcp_manager = None
+        await self.close_checkpointer()
+
+    def _effective_tools(self) -> list:
+        from lorcy_code.tools.registry import ALL_TOOLS
+        mcp_tools = self.mcp_manager.get_tools() if self.mcp_manager else []
+        return [*ALL_TOOLS, *mcp_tools]
+
+    async def _confirm_mcp_trust(self, config) -> bool:
+        command = " ".join([config.command or "", *config.args]).strip()
+        return await confirm(
+            f"项目请求运行 MCP 服务 {config.name}: {command}\n是否信任此配置？",
+            default=False,
+        )
+
     async def _rebuild_agent(self, *, rebuild_session: bool = False) -> None:
         """重建 agent（可选重建 session/checkpointer）"""
         from lorcy_code.agents.context import create_checkpointer
@@ -144,6 +164,7 @@ class ChatREPL:
             self.model_config,
             self.checkpointer,
             self.yolo,
+            self._effective_tools(),
         )
 
     async def initialize(self):
@@ -168,12 +189,25 @@ class ChatREPL:
         db_path = self.session_mgr.sessions_dir / "checkpointer.db"
         self.checkpointer = await create_checkpointer(db_path)
 
+        # MCP 服务独立初始化；单个服务失败不会阻止主 Agent 启动。
+        from lorcy_code.mcp import MCPManager
+        self.mcp_manager = MCPManager(
+            self.workplace_path,
+            trust_callback=self._confirm_mcp_trust,
+        )
+        await self.mcp_manager.start()
+        for error in self.mcp_manager.store.errors:
+            render_warning(f"MCP 配置错误: {error}")
+        for warning in self.mcp_manager.store.warnings:
+            render_warning(f"MCP 安全提示: {warning}")
+
         # 构建 agent（可能较慢，放线程）
         self.agent = await asyncio.to_thread(
             build_agent,
             self.model_config,
             self.checkpointer,
-            self.yolo
+            self.yolo,
+            self._effective_tools(),
         )
 
         # 初始化 Git（subprocess.run 会阻塞事件循环）
@@ -352,6 +386,7 @@ class ChatREPL:
                 working_directory=self.workplace_path,
                 model_config=self.model_config,
                 thread_id=self.session_mgr.thread_id,
+                extra={"mcp_tools": self.mcp_manager.get_tools() if self.mcp_manager else []},
                 yolo=self.yolo,
             )
 
@@ -428,6 +463,7 @@ class ChatREPL:
                                 working_directory=self.workplace_path,
                                 model_config=self.model_config,
                                 thread_id=self.session_mgr.thread_id,
+                                extra={"mcp_tools": self.mcp_manager.get_tools() if self.mcp_manager else []},
                                 yolo=self.yolo,
                             )
                             # 如果当前 input_data 是已消费的 Command(resume=...)，
@@ -699,24 +735,247 @@ class ChatREPL:
         # self._render_status_bar()
 
     async def _cmd_tools(self, _arg: str) -> None:
-        from lorcy_code.tools.registry import ALL_TOOLS
         from rich.table import Table
         table = Table(
-            title="◆ 内置工具",
+            title="◆ 可用工具",
             box=SIMPLE_HEAVY,
             border_style="muted",
             header_style="bold #60a5fa",
             row_styles=["", "dim"],
         )
         table.add_column("工具", style="tool", no_wrap=True)
+        table.add_column("来源", style="cyan", no_wrap=True)
         table.add_column("说明", style="white")
 
-        for t in ALL_TOOLS:
+        for t in self._effective_tools():
             name = t.name
             desc = t.description.split("\n")[0] if t.description else ""
-            table.add_row(name, desc)
+            metadata = getattr(t, "metadata", None) or {}
+            source = metadata.get("mcp_server", "内置")
+            table.add_row(name, source, desc)
 
         console.print(table)
+
+    async def _cmd_mcp(self, arg: str) -> None:
+        """管理 MCP 服务。"""
+        from rich.table import Table
+        from lorcy_code.mcp.models import MCPConfigError, MCPServerConfig, MCPToolFilter
+
+        usage = (
+            "/mcp [list|add|remove|enable|disable|status|test|tools|refresh|logs] [name]"
+        )
+        parts = arg.strip().split(maxsplit=1)
+        action = parts[0].lower() if parts else ""
+        name = parts[1].strip() if len(parts) > 1 else ""
+
+        if not action:
+            choice = await select(
+                "MCP 管理:",
+                ["查看服务", "添加服务", "启用服务", "停用服务", "刷新服务", "查看日志"],
+            )
+            if not choice:
+                return
+            action = {
+                "查看服务": "list", "添加服务": "add", "启用服务": "enable",
+                "停用服务": "disable", "刷新服务": "refresh", "查看日志": "logs",
+            }[choice]
+
+        states = self.mcp_manager.states if self.mcp_manager else {}
+
+        async def choose_server(message: str, predicate=lambda _state: True) -> str:
+            choices = [key for key, state in states.items() if predicate(state)]
+            if not choices:
+                return ""
+            return await select(message, choices) or ""
+
+        if action in {"list", "status"}:
+            if name and name not in states:
+                render_error(f"MCP 服务不存在: {name}")
+                return
+            table = Table(title="◆ MCP 服务", box=SIMPLE_HEAVY, border_style="muted")
+            for column in ("服务", "来源", "传输", "状态", "工具", "连接耗时", "最近错误"):
+                table.add_column(column)
+            selected = {name: states[name]} if name else states
+            for server_name, state in selected.items():
+                self.mcp_manager.get_state(server_name)
+                table.add_row(
+                    server_name,
+                    state.config.source,
+                    state.config.transport,
+                    state.status.value,
+                    str(len(state.tools)),
+                    f"{state.connected_ms:.0f}ms" if state.connected_ms is not None else "-",
+                    state.last_error or "-",
+                )
+            console.print(table)
+            for error in self.mcp_manager.store.errors:
+                render_warning(f"配置错误: {error}")
+            for warning in self.mcp_manager.store.warnings:
+                render_warning(f"安全提示: {warning}")
+            return
+
+        if action == "add":
+            if not name:
+                name = (await text("服务名称: ")).strip()
+            if name in states and not await confirm(
+                f"MCP 服务 {name} 已存在，是否覆盖？", default=False
+            ):
+                return
+            source_label = await select("配置作用域:", ["用户级", "项目级"])
+            transport_label = await select("传输类型:", ["stdio", "streamable_http"])
+            if not source_label or not transport_label:
+                return
+            try:
+                kwargs = {
+                    "name": name,
+                    "enabled": True,
+                    "transport": transport_label,
+                    "source": "user" if source_label == "用户级" else "workspace",
+                    "timeout_seconds": float((await text("超时秒数: ", "60")).strip()),
+                    "tool_filter": MCPToolFilter(),
+                }
+                if transport_label == "stdio":
+                    kwargs["command"] = (await text("启动命令: ")).strip()
+                    raw_args = await text("命令参数: ")
+                    kwargs["args"] = self._split_mcp_args(raw_args)
+                    kwargs["cwd"] = (await text("工作目录: ", "${workspace}")).strip() or None
+                    kwargs["env"] = self._parse_mcp_pairs(await text("环境变量（逗号分隔 KEY=VALUE）: "))
+                else:
+                    kwargs["url"] = (await text("MCP URL: ")).strip()
+                    kwargs["headers"] = self._parse_mcp_pairs(
+                        await text("Headers（逗号分隔 KEY=VALUE）: ")
+                    )
+                config = MCPServerConfig.from_raw(
+                    name,
+                    MCPServerConfig(**kwargs).to_raw(),
+                    source=kwargs["source"],
+                )
+            except (ValueError, MCPConfigError) as exc:
+                render_error(f"配置无效: {exc}")
+                return
+            ok, error, count = await self.mcp_manager.test_config(config)
+            if not ok:
+                render_error(f"连接测试失败: {error or '未知错误'}")
+                return
+            try:
+                self.mcp_manager.store.save_server(config)
+            except MCPConfigError as exc:
+                render_error(str(exc))
+                return
+            await self.mcp_manager.reload()
+            await self._rebuild_agent()
+            render_success(f"已添加 MCP 服务 {name}，发现 {count} 个工具")
+            return
+
+        if action == "refresh" and not name:
+            await self.mcp_manager.reload()
+            ok = await self.mcp_manager.refresh()
+            await self._rebuild_agent()
+            if ok:
+                render_success("已刷新全部 MCP 服务")
+            else:
+                render_warning("刷新完成，部分 MCP 服务连接失败；可用服务不受影响")
+            return
+
+        if action in {"enable", "disable", "remove", "test", "refresh", "tools", "logs"}:
+            if not name:
+                name = await choose_server("选择 MCP 服务:")
+            if not name:
+                render_warning("没有可用的 MCP 服务")
+                return
+            if name not in states:
+                render_error(f"MCP 服务不存在: {name}")
+                return
+
+        if action in {"enable", "disable"}:
+            enabled = action == "enable"
+            try:
+                self.mcp_manager.store.set_enabled(name, enabled)
+            except (MCPConfigError, KeyError) as exc:
+                render_error(f"无法更新 MCP 配置: {exc}")
+                return
+            await self.mcp_manager.reload()
+            await self._rebuild_agent()
+            render_success(f"已{'启用' if enabled else '停用'} MCP 服务 {name}")
+            return
+
+        if action == "remove":
+            state = states[name]
+            if not await confirm(f"确定删除 MCP 服务 {name}？", default=False):
+                return
+            await self.mcp_manager.disconnect(name)
+            try:
+                self.mcp_manager.store.remove_server(name, state.config.source)
+            except MCPConfigError as exc:
+                await self.mcp_manager.reload()
+                render_error(str(exc))
+                return
+            await self.mcp_manager.reload()
+            await self._rebuild_agent()
+            render_success(f"已删除 MCP 服务 {name}")
+            return
+
+        if action in {"test", "refresh"}:
+            ok = await self.mcp_manager.refresh(name)
+            await self._rebuild_agent()
+            state = self.mcp_manager.states[name]
+            if ok:
+                render_success(f"{name} 连接正常，发现 {len(state.tools)} 个工具")
+            else:
+                render_error(f"{name} 连接失败: {state.last_error or '未知错误'}")
+            return
+
+        if action == "tools":
+            state = states[name]
+            if not state.tools:
+                render_warning(f"{name} 当前没有可用工具")
+                return
+            table = Table(title=f"◆ {name} 工具", box=SIMPLE_HEAVY)
+            table.add_column("工具", style="tool")
+            table.add_column("说明")
+            for tool in state.tools:
+                table.add_row(tool.name, (tool.description or "").split("\n")[0])
+            console.print(table)
+            return
+
+        if action == "logs":
+            state = self.mcp_manager.get_state(name)
+            if not state.diagnostics:
+                render_info(f"{name} 暂无诊断日志")
+            else:
+                console.print("\n".join(f"  {line}" for line in state.diagnostics[-100:]))
+            return
+
+        render_warning(f"未知 MCP 子命令。用法: {usage}")
+
+    @staticmethod
+    def _parse_mcp_pairs(value: str) -> dict[str, str]:
+        result: dict[str, str] = {}
+        if not value.strip():
+            return result
+        for item in value.split(","):
+            if "=" not in item:
+                raise ValueError(f"应为 KEY=VALUE: {item.strip()}")
+            key, item_value = item.split("=", 1)
+            key = key.strip()
+            if not key:
+                raise ValueError("变量名不能为空")
+            result[key] = item_value.strip()
+        return result
+
+    @staticmethod
+    def _split_mcp_args(value: str) -> list[str]:
+        import shlex
+
+        if os.name != "nt":
+            return shlex.split(value)
+        parts = shlex.split(value, posix=False)
+        return [
+            part[1:-1]
+            if len(part) >= 2 and part[0] == part[-1] and part[0] in {'"', "'"}
+            else part
+            for part in parts
+        ]
 
     async def _cmd_quit(self, _arg: str) -> None:
         render_warning("Bye!")
@@ -797,6 +1056,8 @@ class ChatREPL:
             render_error("路径不存在")
             return
 
+        if self.mcp_manager is not None:
+            await self.mcp_manager.close()
         self.workplace_path = new_path
         os.chdir(self.workplace_path)
         save_workplace(self.workplace_path)
@@ -804,6 +1065,13 @@ class ChatREPL:
         # 重建子目录
         ensure_chat_config_dir(self.workplace_path)
         self._skill_loader = self._create_skill_loader()
+
+        from lorcy_code.mcp import MCPManager
+        self.mcp_manager = MCPManager(
+            self.workplace_path,
+            trust_callback=self._confirm_mcp_trust,
+        )
+        await self.mcp_manager.start()
 
         # 关闭旧 checkpointer 连接，重建会话和 agent
         await self._rebuild_agent(rebuild_session=True)
@@ -1357,6 +1625,6 @@ class ChatREPL:
         self.yolo = "Yolo" in action
         from lorcy_code.agents.middleware import update_hitl_config
 
-        update_hitl_config(self.yolo)
+        update_hitl_config(self.yolo, self._effective_tools())
         mode_str = "Yolo" if self.yolo else "Common"
         render_success(f"已切换到 {mode_str} 模式")

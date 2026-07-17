@@ -25,6 +25,7 @@ async def dispatch_command(host: CommandHost, raw_command: str) -> None:
         "/git": host._cmd_git,
         "/workdir": host._cmd_workdir,
         "/tools": host._cmd_tools,
+        "/mcp": host._cmd_mcp,
         "/help": host._cmd_help,
         "/quit": host._cmd_quit,
     }
