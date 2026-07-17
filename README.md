@@ -143,6 +143,29 @@ LorcyCode 支持本地 `stdio` 和远程 `Streamable HTTP` MCP 服务，并兼�
 
 项目级 `stdio` 配置首次运行以及可执行配置发生变化时会要求确认信任。
 
+### 示例：注册计算器 MCP Server
+
+仓库自带一个使用官方 `FastMCP` 编写的计算器服务：
+`examples/mcp_servers/calculator_server.py`。在 Windows 上可将以下配置加入
+`~/.lorcy/mcp.json` 或项目的 `.lorcy/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "calculator": {
+      "command": "D:/CodeProject/LorcyCode/.venv/Scripts/python.exe",
+      "args": [
+        "D:/CodeProject/LorcyCode/examples/mcp_servers/calculator_server.py"
+      ]
+    }
+  }
+}
+```
+
+也可以通过 `/mcp add calculator` 添加：传输选择 `stdio`，启动命令填写上面的
+Python 路径，命令参数填写计算器脚本路径。保存后执行 `/mcp tools calculator`
+即可看到 `add`、`subtract`、`multiply`、`divide`、`power` 和 `square_root`。
+
 ## 配置与数据目录
 
 用户级配置位于 `~/.lorcy`：
