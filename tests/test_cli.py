@@ -4,6 +4,8 @@ import lorcy_code.cli.app as cli_app
 from lorcy_code.config import storage
 from lorcy_code.cli.app import app
 from lorcy_code.cli.input import SLASH_COMMANDS, SlashCommandCompleter
+from lorcy_code.cli.repl import ChatREPL
+from types import SimpleNamespace
 
 
 def test_cli_help_keeps_public_commands():
@@ -16,6 +18,18 @@ def test_cli_help_keeps_public_commands():
 def test_slash_command_registry():
     assert {"/help", "/model", "/skill", "/git", "/quit"} <= set(SLASH_COMMANDS)
     assert SlashCommandCompleter()
+
+
+def test_bottom_toolbar_mcp_count_uses_enabled_servers():
+    repl = ChatREPL()
+    repl.mcp_manager = SimpleNamespace(
+        states={
+            "one": SimpleNamespace(config=SimpleNamespace(enabled=True)),
+            "two": SimpleNamespace(config=SimpleNamespace(enabled=True)),
+            "off": SimpleNamespace(config=SimpleNamespace(enabled=False)),
+        }
+    )
+    assert repl._mcp_status_text() == "MCP: 2"
 
 
 def test_yolo_option_is_forwarded(monkeypatch):

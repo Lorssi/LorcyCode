@@ -120,6 +120,11 @@ class ChatREPL:
             return "skills: all"
         return f"skills: {len(loader.get_enabled_skill_names())}"
 
+    def _mcp_status_text(self) -> str:
+        states = self.mcp_manager.states.values() if self.mcp_manager else []
+        enabled = sum(1 for state in states if state.config.enabled)
+        return f"MCP: {enabled}"
+
     # ─── 清理 ────────────────────────────────────────
 
     async def close_checkpointer(self) -> None:
@@ -308,6 +313,7 @@ class ChatREPL:
                 if self.git and self.git_manager and self.git_manager.is_repo():
                     parts.append(f"Git ({self._git_cp_count} cp)")
                 parts.append(self._skill_status_text())
+                parts.append(self._mcp_status_text())
                 wp = str(self.workplace_path) if self.workplace_path else ""
                 if wp:
                     parts.append(f"cwd: {wp}")
