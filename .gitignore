@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Config
-.chat/
+.agents/
 .lorcy/
 .pytest_cache/
 .pytest-tmp*/
